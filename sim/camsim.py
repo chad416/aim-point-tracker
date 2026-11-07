@@ -281,6 +281,53 @@ def random_spots(rng: np.random.Generator, lane: Lane, n: int, total_dn: float,
             for _ in range(n)]
 
 
+# ---------------------------------------------------------------- calibration and zeroing scenes
+
+# What the calibration assumes about the lens: data-sheet focal length and the
+# sensor centre, no distortion. Deliberately not the simulator's true lens
+# (Lane: f 1600 px, principal point at the centre, k1 -0.08 ...): the fit has
+# to absorb the difference (SPEC §6.4).
+NOMINAL_LENS = {"f": 1590.0, "cx": 636.0, "cy": 402.0}
+
+GRID_COLS, GRID_ROWS = 9, 6
+GRID_DOT_SIGMA_MM = 5.0   # projected calibration dots are larger than the emitter spot
+GRID_DOT_TOTAL_DN = 2000.0  # long exposure: peak about 75 DN
+
+
+def calibration_grid(lane: Lane, cols: int = GRID_COLS, rows: int = GRID_ROWS,
+                     margin_x: float = 150.0, margin_y: float = 95.0) -> np.ndarray:
+    """Screen positions (cols * rows, 2) mm of the projected dot grid, row-major from the top-left."""
+    xs = np.linspace(-lane.screen_w / 2 + margin_x, lane.screen_w / 2 - margin_x, cols)
+    ys = np.linspace(lane.screen_h / 2 - margin_y, -lane.screen_h / 2 + margin_y, rows)
+    return np.array([(x, y) for y in ys for x in xs])
+
+
+def grid_spots(grid_mm: np.ndarray, total_dn: float = GRID_DOT_TOTAL_DN,
+               sigma_mm: float = GRID_DOT_SIGMA_MM) -> list[Spot]:
+    return [Spot(xy_mm=(float(x), float(y)), total_dn=total_dn, sigma_mm=sigma_mm, kind="grid")
+            for x, y in grid_mm]
+
+
+def emitter_point(bore_xy_mm, mis_mrad=(0.0, 0.0), muzzle_mm=(0.0, 0.0, 5000.0)) -> np.ndarray:
+    """Where the emitter's beam meets the screen when the bore points at bore_xy_mm.
+
+    The emitter is turned from the bore by mis_mrad (right, up) about the
+    muzzle; the beam is intersected with the screen plane z = 0. So the
+    offset on the screen grows away from the screen centre, as on a real
+    lane (SPEC F13).
+    """
+    m = np.asarray(muzzle_mm, dtype=float)
+    b = np.array([bore_xy_mm[0], bore_xy_mm[1], 0.0]) - m
+    b /= np.linalg.norm(b)
+    right = np.cross(b, [0.0, 1.0, 0.0])
+    right /= np.linalg.norm(right)
+    up = np.cross(right, b)
+    az, el = mis_mrad[0] * 1e-3, mis_mrad[1] * 1e-3
+    d = b + math.tan(az) * right + math.tan(el) * up
+    t = -m[2] / d[2]
+    return (m + t * d)[:2]
+
+
 # ---------------------------------------------------------------- commands
 
 def cmd_lane(args) -> int:

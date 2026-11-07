@@ -15,7 +15,77 @@
   },
   "truth_rms_px_unsaturated": 0.0404,
   "c_ms_per_frame": {
-    "mean": 1.137,
-    "max": 1.873
+    "mean": 1.208,
+    "max": 2.016
+  },
+  "geometry_vs_opencv": {
+    "distort_max_diff": 1.1102230246251565e-16,
+    "undistort_max_diff_vs_opencv": 1.0389467064442215e-12,
+    "homography_exact": {
+      "c_vs_true_px": 4.547473508864641e-13,
+      "opencv_vs_true_px": 2.622850649913744e-05,
+      "c_vs_opencv_px": 2.6228506825987097e-05
+    },
+    "homography_noisy": {
+      "c_vs_true_px": 0.15181026137884146,
+      "opencv_vs_true_px": 0.15036809034516807,
+      "c_vs_opencv_px": 0.0016343521962198793
+    },
+    "calibration_noise_0.0px": {
+      "c_rms_px": 0.0,
+      "opencv_rms_px": 1e-05,
+      "reprojection_max_diff_px": 1e-05,
+      "screen_max_diff_mm": 4e-05,
+      "c_k": [
+        -0.08,
+        0.01,
+        0.0005,
+        -0.0003
+      ],
+      "opencv_k": [
+        -0.079999,
+        0.009994,
+        0.0005,
+        -0.0003
+      ],
+      "true_k": [
+        -0.08,
+        0.01,
+        0.0005,
+        -0.0003
+      ]
+    },
+    "calibration_noise_0.02px": {
+      "c_rms_px": 0.02635,
+      "opencv_rms_px": 0.02639,
+      "reprojection_max_diff_px": 0.00309,
+      "screen_max_diff_mm": 0.00783,
+      "c_k": [
+        -0.080406,
+        0.011921,
+        0.000532,
+        -0.000263
+      ],
+      "opencv_k": [
+        -0.080441,
+        0.012087,
+        0.000527,
+        -0.000293
+      ],
+      "true_k": [
+        -0.08,
+        0.01,
+        0.0005,
+        -0.0003
+      ]
+    },
+    "k2_over_20_noise_draws": {
+      "true_k2": 0.01,
+      "fits": 20,
+      "k2_min": 0.00031,
+      "k2_max": 0.0195,
+      "k2_std": 0.00511,
+      "worst_mapping_error_mm_inside_grid": 0.0726
+    }
   }
 }

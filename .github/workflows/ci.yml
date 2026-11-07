@@ -33,7 +33,7 @@ jobs:
         run: |
           python3 -m venv "$AIMTRK_VENV"
           "$AIMTRK_VENV/bin/pip" install -q --upgrade pip
-          "$AIMTRK_VENV/bin/pip" install -q west numpy scipy matplotlib ruff
+          "$AIMTRK_VENV/bin/pip" install -q west numpy scipy matplotlib ruff pytest opencv-python-headless==5.0.0.93
 
       - name: Cache Zephyr and SDK
         uses: actions/cache@v4
@@ -58,14 +58,14 @@ jobs:
         run: |
           source "$AIMTRK_VENV/bin/activate"
           cd aimtrk-fw
-          ruff check sim tools --line-length 120
+          ruff check sim tools tests --line-length 120
 
       - name: "Reference lane: screen inside the frame (SPEC 2a)"
         run: |
           source "$AIMTRK_VENV/bin/activate"
           python3 aimtrk-fw/sim/camsim.py lane
 
-      - name: "C vs NumPy cross-check, centroid accuracy curve (SPEC 9.2, P01 budget line)"
+      - name: "C vs NumPy and OpenCV cross-check, centroid accuracy curve (SPEC 9.2)"
         run: bash aimtrk-fw/scripts/crosscheck.sh --frames 40
 
       - name: Unit tests (ztest on native_sim) with coverage
@@ -84,6 +84,9 @@ jobs:
           print(f"aimtrk line coverage {100 * cov:.1f} %")
           assert cov >= 0.90, "below the 90 % target"
           EOF
+
+      - name: "Integration tests IT01, IT02, IT08 on rendered sequences (SPEC 9.3)"
+        run: bash aimtrk-fw/scripts/test-it.sh
 
       - name: Upload test reports and results
         if: always()

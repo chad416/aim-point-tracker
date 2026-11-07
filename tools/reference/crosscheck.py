@@ -14,7 +14,8 @@ freeze are exercised. Both implementations must agree frame by frame:
   background  equal after the last frame
 
 It also reports the C spots against the simulator's ground truth and the C
-processing time per frame (first look at P05).
+processing time per frame (first look at P05), and runs geom_check.py: the C
+lens model, homography and calibration against OpenCV.
 
 Usage: crosscheck.py [--frames 40] [--seed 3]   -> results/crosscheck.json
 """
@@ -34,6 +35,7 @@ sys.path.insert(0, str(HERE.parents[1] / "sim"))
 
 import aimtrk_c as AT  # noqa: E402
 import camsim  # noqa: E402
+import geom_check  # noqa: E402
 from detect_ref import DetectRef  # noqa: E402
 
 TOL_PX = 2e-4
@@ -156,6 +158,9 @@ def main(argv=None) -> int:
     if not np.array_equal(bg_c, bg_r):
         errors.append(f"background differs in {(bg_c != bg_r).sum()} cells")
 
+    geo, geo_errs = geom_check.check(lib, cam.lane, np.random.default_rng(args.seed + 100))
+    errors += geo_errs
+
     detectable = [m for m in matched if not m["sat"]]
     ms = np.array(times[1:]) * 1e3
     res = {
@@ -166,6 +171,7 @@ def main(argv=None) -> int:
         "truth_rms_px_unsaturated": round(float(np.sqrt(np.mean([m["err_px"] ** 2 for m in detectable]))), 4)
         if detectable else None,
         "c_ms_per_frame": {"mean": round(float(ms.mean()), 3), "max": round(float(ms.max()), 3)},
+        "geometry_vs_opencv": geo,
     }
     dst = HERE.parents[1] / "results" / "crosscheck.json"
     dst.write_text(json.dumps(res, indent=2) + "\n")

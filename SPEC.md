@@ -1,6 +1,6 @@
 # S3 — Camera Aim-Point Tracker
 
-Specification, revision B (7 Nov 2026): week 1 done. Changes from revision A: week 1 results in §2a, §3.3, §6.1, §6.2 and §12; at least two time slots (§6.5).
+Specification, revision C (8 Nov 2026): week 2 done. Revision B (7 Nov) added the week 1 results (§2a, §3.3, §6.1, §6.2, §12) and the minimum of two time slots (§6.5). Revision C adds the week 2 results (§3.3, §6.3, §6.4, §9.3) and a separate `zero` module (§5).
 
 Camera-based hit and aim tracking for a small-arms training lane. Each trainer weapon has an infrared emitter at the muzzle. An IR camera watches the projection screen, finds the emitter's spot in every frame and maps it to screen coordinates. It then tells the lane which weapon hit where:
 - a **hit** for every shot, matched to the weapon's SHOT_EVENT by lane time;
@@ -104,7 +104,7 @@ At 5 m, 1 mm on the screen is 0.2 mrad of aim.
 | P06 | Calibration: fit residual ≤ 0.3 px RMS; held-out grid points ≤ 0.5 px RMS. |
 | P07 | Lane-time stamp of each frame within ±100 µs of the simulator's true exposure time. |
 
-### 3.3 Error budget for P01 (to confirm in week 2)
+### 3.3 Error budget for P01 (measured in weeks 1 and 2)
 | Source | Size | On the screen |
 |---|---|---|
 | Centroid noise at nominal SNR | 0.1 px | 0.25 mm |
@@ -112,7 +112,20 @@ At 5 m, 1 mm on the screen is 0.2 mrad of aim.
 | Spot motion during the 0.5 ms strobe (muzzle at 50 mrad/s) | 0.025 mrad | 0.13 mm |
 | **Total (root sum of squares)** | | **about 0.8 mm**, against the 2 mm limit |
 
-Week 1 measured the first line (§6.2): 0.018 px RMS at the nominal spot (0.05 mm), well inside the 0.1 px allowed. The calibration residual is now the largest term; week 2 measures it.
+Week 1 measured the first line (§6.2): 0.018 px RMS at the nominal spot (0.05 mm), well inside the 0.1 px allowed.
+
+Week 2 measured the rest:
+
+| Source | Budget | Measured |
+|---|---|---|
+| Calibration residual | 0.3 px (0.75 mm) | 0.023 px fit, 0.023 px held-out (IT01); the mapping is within 0.04 mm of the true camera over the whole screen |
+| Hit accuracy, everything together (P01) | ≤ 2 mm RMS, ≤ 5 mm at the 99th percentile | 0.039 mm RMS and 0.082 mm at the 99th percentile over 500 shots (IT02) |
+
+The simulated system meets P01 by a factor of 50. That margin shows what the simulation leaves out, not a reason to tighten P01:
+- The simulator's lens follows the same Brown–Conrady model the calibration fits. Only the focal length and principal point differ from the nominal values, so the fit can match it almost exactly. A real lens has terms the model does not hold.
+- The screen is perfectly flat, and the projected dots sit exactly where the grid says. A fabric screen that bows, or a projector's own distortion, moves real points by millimetres.
+
+The 2 mm limit keeps room for those.
 
 Not in the budget: screen flatness and the projector's own geometry (the screen is assumed flat), and the shooter's eye-to-bore parallax (a sight setting, not the tracker's).
 
@@ -156,7 +169,9 @@ Design choices:
 | `geom` | Distortion model, undistortion by Newton iteration, homography (normalised DLT), image ↔ screen mapping |
 | `calib` | Dot-grid detection and ordering, homography and distortion fit by Levenberg–Marquardt, residuals, hold-out check |
 | `track` | Constant-velocity track per weapon (α-β filter), prediction to any lane time, gating |
-| `match` | SHOT_EVENT → frame, spot assignment (slot, gate, nearest predicted position; optimal assignment for ≤ 4 weapons), HIT and no-hit reasons, zeroing offsets |
+| `match` | SHOT_EVENT → frame, spot assignment (slot, gate, nearest predicted position; optimal assignment for ≤ 4 weapons), HIT and no-hit reasons |
+| `zero` | Zeroing offset per weapon: mean hit − target over N shots, refused if too few shots or the group is too scattered; the old offset stays until a new one succeeds (week 2: separate from `match`, so IT08 could run before `match` exists) |
+| `linalg` | Linear solve and symmetric eigenproblem (Jacobi) for the rim fit, the DLT and the calibration |
 | `timesync` | SYNC → offset and drift (shared design with S1) |
 
 Python reference (`tools/reference/`): the same steps in NumPy, plus OpenCV's `findHomography` and `calibrateCamera` as independent checks for `geom` and `calib`.
@@ -205,11 +220,34 @@ Python reference (`tools/reference/`): the same steps in NumPy, plus OpenCV's `f
 - Screen mapping: undistorted image point → homography H → screen (x, y) in mm, origin at the screen centre, y up.
 - Undistortion is the inverse of the distortion model, solved by Newton iteration (3 iterations, checked against the forward model).
 
+**Week 2 implementation** (`aimtrk/src/geom.c`):
+- **Undistortion:** Newton iteration with the analytic Jacobian, to 1e-12 (usually 3–4 iterations). A root where the Jacobian is not positive definite is refused, because a polynomial distortion folds over far out, and a root there is not the physical inverse.
+- **Homography:** normalised DLT (Hartley), with the smallest singular vector taken from a Jacobi eigen-decomposition of AᵀA. A point set without a unique solution (collinear points, fewer than four) is refused.
+- **Against OpenCV** (`tools/reference/geom_check.py`, in the CI cross-check):
+  - Distortion matches `projectPoints` to 1e-16.
+  - Undistortion matches `undistortPoints` to 1e-12.
+  - On exact data, the C homography reproduces the true one to 5e-13 px. OpenCV's `findHomography` is 3e-5 px off: its refinement stops earlier.
+
 ### 6.4 Calibration
 - The projector shows a 9 × 6 dot grid; the camera captures it with a long exposure. Projectors leak some light at 850 nm; in the simulator the leak is a parameter, and the real fallback is IR LED markers at known screen points.
 - Fit: normalised DLT for H, then Levenberg–Marquardt on H and the distortion together, minimising the reprojection error in pixels.
 - Accept only if P06 holds; otherwise keep the previous calibration and raise a fault bit.
 - Every fifth grid point is held out of the fit and used to check it.
+
+**Week 2 implementation** (`aimtrk/src/calib.c`, `tools/calib/calibrate.py`):
+- **Single view.** The camera sees one plane, so its focal length and principal point cannot be fitted apart from the pose. They stay at the lens's nominal values. The homography (8 degrees of freedom) absorbs their error, and the distortion k1, k2, p1, p2 is fitted with it. Levenberg–Marquardt on 12 parameters, with screen coordinates normalised.
+  - In the tests, the nominal values are deliberately off: 1590 px against the true 1600 px, and a principal point 4.3 px from the true one. The fit absorbs that: 0.0003 px residual on noise-free dots (unit test).
+- **Ordering.** The four extreme dots are the grid's corners (the camera must be roughly upright). A homography through them predicts every grid point, each grid point takes the nearest dot inside a 30 px gate, and a second pass repeats it with all matches. Shuffled dots and spurious detections between grid points give the same result (unit test).
+- **Refusals.** A missing dot, too few dots, or a residual over P06 refuse the fit, and the previous calibration stays in use. IT01 refuses:
+  - a grid with a block of dots hidden by a person;
+  - a grid whose dots are displaced by 8 mm: fit residual 3 px against the 0.3 px limit.
+- **calib.json.** The Python runner writes the geometry, the fit report and the grid with a version and a CRC-32. A changed byte or a wrong version is refused on loading. `aim_host` (C) reads the same file in week 3.
+- **Against OpenCV.** On the same grid points, with the true intrinsics for both, the C fit and `calibrateCamera` agree:
+  - to 1e-5 px on noise-free dots;
+  - to 0.003 px and 0.008 mm on the screen with 0.02 px dot noise.
+- **Findings:**
+  - **k2 on its own is not trustworthy.** A single plane determines it poorly. Over 20 draws of 0.02 px dot noise, the fitted k2 ranged from 0.0003 to 0.0195 around the true 0.01, while the mapping stayed within 0.073 mm of the truth inside the grid (`results/crosscheck.json`, `k2_over_20_noise_draws`). Only the mapping is used, never k2 alone.
+  - **Error grows outside the grid.** With 0.05 px dot noise, the error at the screen corners, 150 mm and 95 mm outside the grid, reaches 0.75 mm against 0.13 mm inside (unit test `calib.test_fit_with_noise`). The grid should therefore reach as close to the screen edges as the projector allows.
 
 ### 6.5 Strobing on lane time (S1 v0.6)
 A 0.5 ms emitter pulse fired at a random moment overlaps a 1 ms exposure only 15 % of the time at 100 fps, and lies fully inside it 5 % of the time. So the weapon schedules its pulses into the exposure windows, which it knows from lane time (S1 F12):
@@ -263,10 +301,11 @@ Rendering cost is measured in week 1 (open point §11). If it is too slow for lo
 |---|---|
 | detect | Thresholds, runs, union-find across rows, rejection rules, background freeze under spots, noise estimate |
 | centroid | Sub-pixel accuracy on rendered spots against SNR (the P01 curve), saturation bias and the rim method, border pixels |
-| geom | Distortion round trip, homography on known point sets, off-screen handling |
-| calib | Fit on synthetic grids with noise; recovery of known distortion; rejection of a bad fit (P06) |
+| geom | Linear solve and eigen-decomposition; distortion round trip and the fold-over refusal; homography (DLT) on known point sets and degenerate ones; image ↔ screen round trip and off-screen handling |
+| calib | Fit on synthetic grids, noise-free and with noise, with deliberately wrong nominal intrinsics; ordering with shuffled and spurious dots; missing dots; rejection of a bad fit (P06), the previous calibration kept; iteration limit |
+| zero | Offset and its use; refusal of too few shots and of a scattered group, the old offset kept |
 | track | Constant-velocity tracking, gating, loss and restart |
-| match | Shot frame selection on lane time, slot assignment, two-shots-in-one-frame, AMBIGUOUS cases, zeroing |
+| match | Shot frame selection on lane time, slot assignment, two-shots-in-one-frame, AMBIGUOUS cases |
 | proto | Every frame against the DBC |
 
 ### 9.2 Reference cross-check (`tools/reference/`)
@@ -286,6 +325,16 @@ Rendering cost is measured in week 1 (open point §11). If it is too slow for lo
 | IT08 zeroing | F13 | Emitter misaligned by a known offset; zeroing removes it |
 | IT09 long run | P03, P05 | 100 000 frames, two weapons: false HITs, worst processing time, no heap growth |
 | IT10 end to end with S1 | F06, F08, P07 | S1 firmware (v0.6) in Renode over vcan0, two weapons firing; local and in the demo, not in CI (no vcan on hosted runners) |
+
+**Week 2:** IT01, IT02 and IT08 pass (`tests/integration/`, pytest). Until `aim_host` exists (week 3), they drive the C library through ctypes on frames from the camera simulator. The pipeline is the same: render, detect, map to the screen, zero. The HIT frame part of IT02 (F10) comes with `match` in week 3.
+
+| Test | Result |
+|---|---|
+| IT01 | 54 of 54 dots found; fit 0.023 px RMS, held-out 0.023 px RMS (P06: 0.3 / 0.5 px); the calibrated mapping is within 0.041 mm of the true camera everywhere on the screen. A displaced grid and a partly hidden grid are both refused. |
+| IT02 | 500 of 500 shots found; 0.039 mm RMS, 0.082 mm at the 99th percentile, worst 0.093 mm (P01: 2 / 5 mm); no bias above 0.005 mm. |
+| IT08 | Emitter 2 mrad right and 1 mrad down from the bore: 11.5 mm RMS error before zeroing. Five zeroing shots at the centre, with 2 mm of aim scatter, measure the offset to 0.29 mm. After zeroing: 0.63 mm RMS and 1.2 mm worst over the screen. The rest is the zeroing shots' mean aim error, plus the offset growing towards the screen edges, because the misalignment is an angle. |
+
+Plots: `results/plots/it01_calibration.png`, `results/plots/it02_accuracy.png`.
 
 ### 9.4 Honest limits
 - **The camera is simulated.** Accuracy is measured against the simulator's own truth. A real lens, sensor and screen bring effects the model leaves out or simplifies (screen texture, non-flat screens, lens flare, sensor non-linearity).
@@ -309,7 +358,7 @@ Rendering cost is measured in week 1 (open point §11). If it is too slow for lo
 | Week | Work | Done when |
 |---|---|---|
 | 1 ✓ | Repository from the S2 template; camera simulator (geometry, spots, sensor, ground truth); `detect` and `centroid` in C with the NumPy reference; centroid accuracy vs SNR | detect and centroid suites green; the centroid curve meets the P01 budget line. **Done 7 Nov:** 21 of 21 unit tests pass, 99.7 % line coverage; C matches NumPy on 40 frames; 0.018 px at the nominal spot |
-| 2 | `geom` and `calib`; OpenCV cross-check; accuracy over the screen; zeroing | IT01, IT02 and IT08 pass; P01 shown on plots |
+| 2 ✓ | `geom` and `calib`; OpenCV cross-check; accuracy over the screen; zeroing | IT01, IT02 and IT08 pass; P01 shown on plots. **Done 8 Nov:** 35 of 35 unit tests, 97.8 % line coverage; IT01, IT02 and IT08 pass; P01 0.039 mm RMS |
 | 3 | `timesync`, `track`, `match`; `aim_host` with the file transport and SocketCAN; DBC frames; S1 v0.6 emitter strobing with its own tests | IT03–IT07 pass; S1's tests still pass with v0.6 |
 | 4 | IT09, IT10; lane view; demo, GIF and video; traceability; CI; README | Portfolio-ready repository with green CI |
 

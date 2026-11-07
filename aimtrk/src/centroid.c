@@ -5,6 +5,7 @@
 #include <stdbool.h>
 
 #include "aimtrk/centroid.h"
+#include "aimtrk/linalg.h"
 
 #define RIM_PARAMS     6
 #define RIM_MIN_PIXELS 8
@@ -19,55 +20,9 @@ static inline double bg_at(const at_cwin *win, int i)
 	return (win->bg != NULL) ? (double)win->bg[i] : (double)win->bg_const;
 }
 
-/* Solve a x = b in place (n <= RIM_PARAMS), Gaussian elimination with partial pivoting. */
-static bool solve(double a[RIM_PARAMS][RIM_PARAMS], double b[RIM_PARAMS], int n)
-{
-	for (int k = 0; k < n; k++) {
-		int p = k;
-
-		for (int r = k + 1; r < n; r++) {
-			if (fabs(a[r][k]) > fabs(a[p][k])) {
-				p = r;
-			}
-		}
-		if (fabs(a[p][k]) < 1e-12) {
-			return false;
-		}
-		if (p != k) {
-			for (int c = 0; c < n; c++) {
-				double t = a[k][c];
-
-				a[k][c] = a[p][c];
-				a[p][c] = t;
-			}
-			double t = b[k];
-
-			b[k] = b[p];
-			b[p] = t;
-		}
-		for (int r = k + 1; r < n; r++) {
-			double f = a[r][k] / a[k][k];
-
-			for (int c = k; c < n; c++) {
-				a[r][c] -= f * a[k][c];
-			}
-			b[r] -= f * b[k];
-		}
-	}
-	for (int k = n - 1; k >= 0; k--) {
-		double s = b[k];
-
-		for (int c = k + 1; c < n; c++) {
-			s -= a[k][c] * b[c];
-		}
-		b[k] = s / a[k][k];
-	}
-	return true;
-}
-
 int at_centroid_rim(const at_cwin *win, uint8_t sat_level, float min_signal, float *x, float *y)
 {
-	double ata[RIM_PARAMS][RIM_PARAMS] = {{0}};
+	double ata[RIM_PARAMS * RIM_PARAMS] = {0};
 	double atb[RIM_PARAMS] = {0};
 	/* Coordinates relative to the window centre keep the normal equations well conditioned. */
 	double uc = 0.5 * (double)(win->w - 1);
@@ -96,14 +51,14 @@ int at_centroid_rim(const at_cwin *win, uint8_t sat_level, float min_signal, flo
 
 			for (int j = 0; j < RIM_PARAMS; j++) {
 				for (int k = 0; k < RIM_PARAMS; k++) {
-					ata[j][k] += w * phi[j] * phi[k];
+					ata[(j * RIM_PARAMS) + k] += w * phi[j] * phi[k];
 				}
 				atb[j] += w * phi[j] * ls;
 			}
 			n++;
 		}
 	}
-	if ((n < RIM_MIN_PIXELS) || !solve(ata, atb, RIM_PARAMS)) {
+	if ((n < RIM_MIN_PIXELS) || !at_solve(ata, atb, RIM_PARAMS)) {
 		return -1;
 	}
 	/* Peak where the gradient is zero: [2d e; e 2f] (u v)' = -(b c)'. */
