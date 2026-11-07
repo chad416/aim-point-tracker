@@ -1,0 +1,103 @@
+{
+  "lane": {
+    "screen_w": 3000.0,
+    "screen_h": 1690.0,
+    "cam_pos": [
+      0.0,
+      750.0,
+      4000.0
+    ],
+    "look_at": [
+      0.0,
+      0.0,
+      0.0
+    ],
+    "width": 1280,
+    "height": 800,
+    "f_px": 1600.0,
+    "k1": -0.08,
+    "k2": 0.01,
+    "p1": 0.0005,
+    "p2": -0.0003
+  },
+  "sensor": {
+    "full_well_e": 10000.0,
+    "read_noise_e": 12.0,
+    "black_dn": 4.0,
+    "prnu": 0.01,
+    "dsnu_dn": 0.3,
+    "hot_fraction": 2e-05,
+    "hot_dn": [
+      40.0,
+      200.0
+    ],
+    "ambient_dn": 12.0,
+    "ambient_gradient": 0.3,
+    "seed": 1234
+  },
+  "lens_sigma_px": 0.5,
+  "points": {
+    "centre": {
+      "u": 639.5,
+      "v": 399.5,
+      "mm_per_px": [
+        2.544,
+        2.588
+      ],
+      "spot_sigma_px": [
+        1.192,
+        1.209
+      ]
+    },
+    "top_left": {
+      "u": 35.4,
+      "v": 65.2,
+      "mm_per_px": [
+        2.425,
+        2.565
+      ],
+      "spot_sigma_px": [
+        1.201,
+        1.258
+      ]
+    },
+    "top_right": {
+      "u": 1243.1,
+      "v": 65.4,
+      "mm_per_px": [
+        2.427,
+        2.568
+      ],
+      "spot_sigma_px": [
+        1.2,
+        1.257
+      ]
+    },
+    "bottom_left": {
+      "u": 78.5,
+      "v": 710.2,
+      "mm_per_px": [
+        2.652,
+        2.921
+      ],
+      "spot_sigma_px": [
+        1.081,
+        1.168
+      ]
+    },
+    "bottom_right": {
+      "u": 1200.1,
+      "v": 710.1,
+      "mm_per_px": [
+        2.654,
+        2.924
+      ],
+      "spot_sigma_px": [
+        1.08,
+        1.167
+      ]
+    }
+  },
+  "margin_px": 35.4,
+  "background_noise_dn": 0.71
+}

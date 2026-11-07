@@ -1,0 +1,21 @@
+{
+  "frames": 40,
+  "seed": 3,
+  "mismatches": 0,
+  "spots_compared": 312,
+  "screen_spots": 234,
+  "screen_spots_found": 234,
+  "saturated": 108,
+  "rim_fits": 108,
+  "rejected": {
+    "small": 780,
+    "large": 8,
+    "weak": 0,
+    "elongated": 8
+  },
+  "truth_rms_px_unsaturated": 0.0404,
+  "c_ms_per_frame": {
+    "mean": 1.137,
+    "max": 1.873
+  }
+}

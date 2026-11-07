@@ -1,0 +1,471 @@
+/*
+ * IR spot detection, SPEC §6.1. Integer work per pixel, floating point per
+ * frame (sigma) and per spot (centroid).
+ */
+#include <math.h>
+#include <string.h>
+
+#include "aimtrk/detect.h"
+
+#define NONE      0xFFFFU
+#define DROPPED   0xFFFEU
+#define HIST_BINS 511 /* frame - background, -255..255 */
+#define HIST_ZERO 255
+#define NOISE_STEP 4  /* noise sample: every 4th pixel of every 4th row */
+#define MAD_TO_SIGMA 1.4826
+
+void at_detect_cfg_default(at_detect_cfg *cfg, uint16_t width, uint16_t height)
+{
+	*cfg = (at_detect_cfg){
+		.width = width,
+		.height = height,
+		.bg_shift = 4,  /* time constant 16 frames, 160 ms at 100 fps */
+		.k_sigma = 6.0F,
+		.t_min = 8.0F,
+		.min_area = 3,
+		.max_area = 300,
+		.max_extent = 24,
+		.max_elong = 3.0F,
+		.min_snr = 8.0F,
+		.sat_level = 255,
+		.max_runs = 8192,
+		.max_blobs = 256,
+	};
+}
+
+static bool cfg_ok(const at_detect_cfg *cfg)
+{
+	return (cfg->width >= AT_BG_CELL) && (cfg->height >= AT_BG_CELL) &&
+	       ((cfg->width % AT_BG_CELL) == 0) && ((cfg->height % AT_BG_CELL) == 0) &&
+	       (cfg->bg_shift <= 16U) && (cfg->max_runs >= 1U) && (cfg->max_runs < DROPPED) &&
+	       (cfg->max_blobs >= 1U) && (cfg->max_blobs < DROPPED) && (cfg->max_extent >= 1U) &&
+	       (cfg->max_extent <= 254U) && (cfg->k_sigma >= 0.0F) && (cfg->t_min >= 0.0F);
+}
+
+static size_t align8(size_t n)
+{
+	return (n + 7U) & ~(size_t)7U;
+}
+
+/* Memory layout, in order: bg, thr, cellsum, freeze, runs, blob_of, blobs, mask, bgw, hist. */
+static size_t layout(const at_detect_cfg *cfg, size_t off[10])
+{
+	size_t cells = (size_t)(cfg->width / AT_BG_CELL) * (size_t)(cfg->height / AT_BG_CELL);
+	size_t win = (size_t)(cfg->max_extent + 2U) * (size_t)(cfg->max_extent + 2U);
+	size_t sizes[10] = {
+		cells * sizeof(uint16_t),
+		cells,
+		cells * sizeof(uint16_t),
+		cells,
+		cfg->max_runs * sizeof(at_run),
+		cfg->max_runs * sizeof(uint16_t),
+		cfg->max_blobs * sizeof(at_blob),
+		win,
+		win * sizeof(float),
+		HIST_BINS * sizeof(uint32_t),
+	};
+	size_t total = 0;
+
+	for (int i = 0; i < 10; i++) {
+		off[i] = total;
+		total += align8(sizes[i]);
+	}
+	return total;
+}
+
+size_t at_detect_mem_size(const at_detect_cfg *cfg)
+{
+	size_t off[10];
+
+	return cfg_ok(cfg) ? (layout(cfg, off) + 8U) : 0U; /* + 8: room to align the block */
+}
+
+int at_detect_init(at_detect *d, const at_detect_cfg *cfg, void *mem, size_t mem_size)
+{
+	size_t off[10];
+
+	if (!cfg_ok(cfg) || (mem == NULL) || (mem_size < at_detect_mem_size(cfg))) {
+		return -1;
+	}
+	uint8_t *base = (uint8_t *)mem;
+
+	base += (8U - ((uintptr_t)base & 7U)) & 7U;
+	(void)layout(cfg, off);
+
+	memset(d, 0, sizeof(*d));
+	d->cfg = *cfg;
+	d->cw = cfg->width / AT_BG_CELL;
+	d->ch = cfg->height / AT_BG_CELL;
+	d->bg = (uint16_t *)(void *)(base + off[0]);
+	d->thr = base + off[1];
+	d->cellsum = (uint16_t *)(void *)(base + off[2]);
+	d->freeze = base + off[3];
+	d->runs = (at_run *)(void *)(base + off[4]);
+	d->blob_of = (uint16_t *)(void *)(base + off[5]);
+	d->blobs = (at_blob *)(void *)(base + off[6]);
+	d->mask = base + off[7];
+	d->bgw = (float *)(void *)(base + off[8]);
+	d->hist = (uint32_t *)(void *)(base + off[9]);
+	return 0;
+}
+
+static void cell_sums(at_detect *d, const uint8_t *img, size_t stride)
+{
+	memset(d->cellsum, 0, (size_t)d->cw * (size_t)d->ch * sizeof(uint16_t));
+	for (int y = 0; y < d->cfg.height; y++) {
+		const uint8_t *row = img + ((size_t)y * stride);
+		uint16_t *cs = d->cellsum + ((size_t)(y / AT_BG_CELL) * (size_t)d->cw);
+
+		for (int x = 0; x < d->cfg.width; x++) {
+			cs[x / AT_BG_CELL] += row[x];
+		}
+	}
+}
+
+/* A cell sum is 16 pixels, so sum * 16 is the cell mean in DN * 256 (at most 65280). */
+#define SUM_TO_BG(s) ((int32_t)(s) * (256 / (AT_BG_CELL * AT_BG_CELL)))
+
+void at_detect_learn(at_detect *d, const uint8_t *img, size_t stride)
+{
+	cell_sums(d, img, stride);
+	for (int i = 0; i < (d->cw * d->ch); i++) {
+		d->bg[i] = (uint16_t)SUM_TO_BG(d->cellsum[i]);
+	}
+	d->bg_valid = true;
+}
+
+void at_detect_reset(at_detect *d)
+{
+	d->bg_valid = false;
+}
+
+float at_detect_bg(const at_detect *d, int x, int y)
+{
+	return (float)d->bg[((y / AT_BG_CELL) * d->cw) + (x / AT_BG_CELL)] / 256.0F;
+}
+
+const at_detect_stats *at_detect_get_stats(const at_detect *d)
+{
+	return &d->stats;
+}
+
+/* Median of a histogram of n samples, bins of width 1; bin 0 starts at lo. */
+static double hist_median(const uint32_t *h, int bins, double lo, uint32_t n)
+{
+	double target = 0.5 * (double)n;
+	double cum = 0.0;
+
+	for (int i = 0; i < bins; i++) {
+		if ((h[i] > 0U) && ((cum + (double)h[i]) >= target)) {
+			return lo + (double)i + ((target - cum) / (double)h[i]);
+		}
+		cum += (double)h[i];
+	}
+	return lo + (double)bins;
+}
+
+float at_detect_noise(at_detect *d, const uint8_t *img, size_t stride)
+{
+	uint32_t *h = d->hist;
+	uint32_t n = 0;
+
+	memset(h, 0, HIST_BINS * sizeof(uint32_t));
+	for (int y = NOISE_STEP / 2; y < d->cfg.height; y += NOISE_STEP) {
+		const uint8_t *row = img + ((size_t)y * stride);
+		const uint16_t *bg = d->bg + ((size_t)(y / AT_BG_CELL) * (size_t)d->cw);
+
+		for (int x = NOISE_STEP / 2; x < d->cfg.width; x += NOISE_STEP) {
+			int b = ((int)bg[x / AT_BG_CELL] + 128) >> 8;
+
+			h[(int)row[x] - b + HIST_ZERO]++;
+			n++;
+		}
+	}
+	/* Median of the difference, in bins centred on integers. */
+	double med = hist_median(h, HIST_BINS, -255.5, n);
+	int m = (int)floor(med + 0.5);
+	/*
+	 * Folded histogram of |d - m| into h[0..255] is not possible in place, so
+	 * walk it directly: bin 0 covers 0..0.5 (one integer value), bin k >= 1
+	 * covers k - 0.5..k + 0.5 (two values, m - k and m + k).
+	 */
+	double target = 0.5 * (double)n;
+	double cum = 0.0;
+	double mad = 0.0;
+
+	for (int k = 0; k < HIST_BINS; k++) {
+		int lo = m - k + HIST_ZERO;
+		int hi = m + k + HIST_ZERO;
+		uint32_t c = 0;
+
+		if ((lo >= 0) && (lo < HIST_BINS)) {
+			c += h[lo];
+		}
+		if ((k > 0) && (hi >= 0) && (hi < HIST_BINS)) {
+			c += h[hi];
+		}
+		if ((c > 0U) && ((cum + (double)c) >= target)) {
+			double frac = (target - cum) / (double)c;
+
+			mad = (k == 0) ? (0.5 * frac) : (((double)k - 0.5) + frac);
+			break;
+		}
+		cum += (double)c;
+	}
+	d->stats.sigma = (float)(MAD_TO_SIGMA * mad);
+	return d->stats.sigma;
+}
+
+static uint16_t find(at_run *runs, uint16_t i)
+{
+	while (runs[i].label != i) {
+		runs[i].label = runs[runs[i].label].label; /* path halving */
+		i = runs[i].label;
+	}
+	return i;
+}
+
+static void unite(at_run *runs, uint16_t a, uint16_t b)
+{
+	uint16_t ra = find(runs, a);
+	uint16_t rb = find(runs, b);
+
+	if (ra < rb) {
+		runs[rb].label = ra;
+	} else if (rb < ra) {
+		runs[ra].label = rb;
+	}
+}
+
+/* Threshold, cell sums and runs in one pass over the frame. Returns the run count. */
+static int scan(at_detect *d, const uint8_t *img, size_t stride)
+{
+	at_run *runs = d->runs;
+	int n = 0;
+	int prev_start = 0, prev_end = 0;
+
+	memset(d->cellsum, 0, (size_t)d->cw * (size_t)d->ch * sizeof(uint16_t));
+	for (int y = 0; y < d->cfg.height; y++) {
+		const uint8_t *row = img + ((size_t)y * stride);
+		const uint8_t *thr = d->thr + ((size_t)(y / AT_BG_CELL) * (size_t)d->cw);
+		uint16_t *cs = d->cellsum + ((size_t)(y / AT_BG_CELL) * (size_t)d->cw);
+		int row_start = n;
+		int j = prev_start;
+		int x = 0;
+
+		while (x < d->cfg.width) {
+			uint8_t p = row[x];
+
+			cs[x / AT_BG_CELL] += p;
+			if (p <= thr[x / AT_BG_CELL]) {
+				x++;
+				continue;
+			}
+			int x0 = x;
+
+			for (x++; x < d->cfg.width; x++) {
+				p = row[x];
+				cs[x / AT_BG_CELL] += p;
+				if (p <= thr[x / AT_BG_CELL]) {
+					break;
+				}
+			}
+			int x1 = x - 1;
+
+			x++; /* row[x] is below the threshold and already in the cell sum */
+			if (n >= d->cfg.max_runs) {
+				d->stats.overflow |= AT_OVF_RUNS;
+				continue;
+			}
+			runs[n] = (at_run){(uint16_t)x0, (uint16_t)x1, (uint16_t)y, (uint16_t)n};
+			/* Join runs of the previous row that touch this one (8-connected). */
+			while ((j < prev_end) && ((runs[j].x1 + 1) < x0)) {
+				j++;
+			}
+			for (int k = j; (k < prev_end) && (runs[k].x0 <= (x1 + 1)); k++) {
+				unite(runs, (uint16_t)k, (uint16_t)n);
+			}
+			n++;
+		}
+		prev_start = row_start;
+		prev_end = n;
+	}
+	return n;
+}
+
+/* Paint the blob's runs, dilated by one pixel, into the window mask; fill the window background. */
+static void window(at_detect *d, const at_blob *b, int nruns, at_cwin *win)
+{
+	int x0 = (b->x0 > 0U) ? (b->x0 - 1) : 0;
+	int y0 = (b->y0 > 0U) ? (b->y0 - 1) : 0;
+	int x1 = ((b->x1 + 1) < d->cfg.width) ? (b->x1 + 1) : (d->cfg.width - 1);
+	int y1 = ((b->y1 + 1) < d->cfg.height) ? (b->y1 + 1) : (d->cfg.height - 1);
+	int w = x1 - x0 + 1;
+	int h = y1 - y0 + 1;
+
+	memset(d->mask, 0, (size_t)w * (size_t)h);
+	for (int i = 0; i < nruns; i++) {
+		const at_run *r = &d->runs[i];
+
+		if ((r->label != b->root) || (r->y < b->y0) || (r->y > b->y1)) {
+			continue;
+		}
+		int rx0 = ((r->x0 - 1) > x0) ? (r->x0 - 1) : x0;
+		int rx1 = ((r->x1 + 1) < x1) ? (r->x1 + 1) : x1;
+
+		for (int yy = r->y - 1; yy <= (r->y + 1); yy++) {
+			if ((yy < y0) || (yy > y1)) {
+				continue;
+			}
+			memset(&d->mask[((yy - y0) * w) + (rx0 - x0)], 1, (size_t)(rx1 - rx0 + 1));
+		}
+	}
+	for (int r = 0; r < h; r++) {
+		for (int c = 0; c < w; c++) {
+			d->bgw[(r * w) + c] = at_detect_bg(d, x0 + c, y0 + r);
+		}
+	}
+	win->x0 = x0;
+	win->y0 = y0;
+	win->w = w;
+	win->h = h;
+	win->mask = d->mask;
+	win->bg = d->bgw;
+	win->bg_const = 0.0F;
+}
+
+static void freeze_cells(at_detect *d, const at_blob *b)
+{
+	int cx0 = (b->x0 / AT_BG_CELL) - 1;
+	int cx1 = (b->x1 / AT_BG_CELL) + 1;
+	int cy0 = (b->y0 / AT_BG_CELL) - 1;
+	int cy1 = (b->y1 / AT_BG_CELL) + 1;
+
+	for (int cy = (cy0 < 0) ? 0 : cy0; cy <= cy1 && cy < d->ch; cy++) {
+		for (int cx = (cx0 < 0) ? 0 : cx0; cx <= cx1 && cx < d->cw; cx++) {
+			d->freeze[(cy * d->cw) + cx] = 1U;
+		}
+	}
+}
+
+int at_detect_frame(at_detect *d, const uint8_t *img, size_t stride, at_spot *spots, int max_spots)
+{
+	const at_detect_cfg *cfg = &d->cfg;
+	int ncells = d->cw * d->ch;
+	int nspots = 0;
+
+	memset(&d->stats, 0, sizeof(d->stats));
+	if (!d->bg_valid) {
+		at_detect_learn(d, img, stride);
+		d->stats.learning = true;
+		return 0;
+	}
+
+	/* 2-3: noise, then the threshold per cell. */
+	float sigma = at_detect_noise(d, img, stride);
+	double delta = fmax((double)cfg->k_sigma * (double)sigma, (double)cfg->t_min);
+	int32_t delta256 = (int32_t)floor((delta * 256.0) + 0.5);
+
+	for (int i = 0; i < ncells; i++) {
+		int32_t t = ((int32_t)d->bg[i] + delta256) >> 8;
+
+		d->thr[i] = (t > 255) ? 255U : (uint8_t)t;
+	}
+
+	/* 4: runs, then blobs. */
+	int nruns = scan(d, img, stride);
+	int nblobs = 0;
+
+	for (int i = 0; i < nruns; i++) {
+		d->blob_of[i] = NONE;
+	}
+	for (int i = 0; i < nruns; i++) {
+		at_run *r = &d->runs[i];
+		uint16_t root = find(d->runs, (uint16_t)i);
+
+		if (d->blob_of[root] == NONE) {
+			if (nblobs >= cfg->max_blobs) {
+				d->stats.overflow |= AT_OVF_BLOBS;
+				d->blob_of[root] = DROPPED;
+			} else {
+				d->blobs[nblobs] = (at_blob){root, r->x0, r->x1, r->y, r->y, 0U};
+				d->blob_of[root] = (uint16_t)nblobs++;
+			}
+		}
+		if (d->blob_of[root] == DROPPED) {
+			continue;
+		}
+		at_blob *b = &d->blobs[d->blob_of[root]];
+
+		b->area += (uint32_t)(r->x1 - r->x0 + 1);
+		b->x0 = (r->x0 < b->x0) ? r->x0 : b->x0;
+		b->x1 = (r->x1 > b->x1) ? r->x1 : b->x1;
+		b->y1 = r->y; /* runs come in row order */
+	}
+	/* Roots are final now; store them so window() can compare labels directly. */
+	for (int i = 0; i < nruns; i++) {
+		d->runs[i].label = find(d->runs, (uint16_t)i);
+	}
+
+	/* 5: rejection and centroids. */
+	memset(d->freeze, 0, (size_t)ncells);
+	for (int i = 0; i < nblobs; i++) {
+		const at_blob *b = &d->blobs[i];
+		int ext_w = b->x1 - b->x0 + 1;
+		int ext_h = b->y1 - b->y0 + 1;
+
+		if (b->area < cfg->min_area) {
+			d->stats.rejected[AT_REJ_SMALL]++;
+			continue;
+		}
+		if ((b->area > cfg->max_area) || (ext_w > cfg->max_extent) || (ext_h > cfg->max_extent)) {
+			d->stats.rejected[AT_REJ_LARGE]++;
+			continue;
+		}
+		at_cwin win;
+		at_spot s;
+
+		window(d, b, nruns, &win);
+		win.px = img + ((size_t)win.y0 * stride) + (size_t)win.x0;
+		win.stride = stride;
+		if ((at_centroid(&win, sigma, cfg->sat_level, &s) != 0) || (s.snr < cfg->min_snr)) {
+			d->stats.rejected[AT_REJ_WEAK]++;
+			continue;
+		}
+		if ((s.sig_minor <= 0.0F) || ((s.sig_major / s.sig_minor) > cfg->max_elong)) {
+			d->stats.rejected[AT_REJ_ELONGATED]++;
+			continue;
+		}
+		freeze_cells(d, b);
+		if (nspots >= max_spots) {
+			d->stats.overflow |= AT_OVF_SPOTS;
+			continue;
+		}
+		s.area = (b->area > UINT16_MAX) ? UINT16_MAX : (uint16_t)b->area;
+		if ((b->x0 == 0U) || (b->y0 == 0U) || ((b->x1 + 1) >= cfg->width) ||
+		    ((b->y1 + 1) >= cfg->height)) {
+			s.flags |= AT_SPOT_EDGE;
+		}
+		spots[nspots++] = s;
+	}
+
+	/* 1: background update, except under spots. */
+	int64_t bg_sum = 0;
+
+	for (int i = 0; i < ncells; i++) {
+		if (d->freeze[i] != 0U) {
+			d->stats.frozen_cells++;
+		} else {
+			int32_t diff = SUM_TO_BG(d->cellsum[i]) - (int32_t)d->bg[i];
+
+			/* Truncates toward zero; moves toward a value in 0..65280, so it stays in range. */
+			d->bg[i] = (uint16_t)((int32_t)d->bg[i] + (diff / (1 << cfg->bg_shift)));
+		}
+		bg_sum += d->bg[i];
+	}
+	d->stats.bg_mean = (float)((double)bg_sum / (256.0 * (double)ncells));
+	d->stats.runs = (uint32_t)nruns;
+	d->stats.blobs = (uint32_t)nblobs;
+	d->stats.spots = (uint32_t)nspots;
+	return nspots;
+}

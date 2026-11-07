@@ -1,0 +1,7 @@
+{
+  "frames": 20,
+  "render_ms_poisson": 47.55,
+  "render_ms_gauss": 25.63,
+  "pipe_MB_s": 1272.7,
+  "pipe_fps": 1242.8
+}

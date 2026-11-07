@@ -1,0 +1,99 @@
+name: ci
+
+on:
+  push:
+  pull_request:
+  workflow_dispatch:
+
+# Layout: the repo is checked out to <workspace>/aimtrk-fw and is the west
+# manifest repository (west.yml, self.path: aimtrk-fw); <workspace> is the west
+# topdir that holds zephyr/ and modules/.
+env:
+  AIMTRK_WS: ${{ github.workspace }}
+  AIMTRK_VENV: ${{ github.workspace }}/venv
+
+jobs:
+  build-and-test:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 60
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          path: aimtrk-fw
+
+      - name: System packages
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq --no-install-recommends \
+            git cmake ninja-build gperf ccache device-tree-compiler wget \
+            python3-dev python3-venv xz-utils file make gcc gcc-multilib g++-multilib libmagic1
+
+      - name: Python venv
+        run: |
+          python3 -m venv "$AIMTRK_VENV"
+          "$AIMTRK_VENV/bin/pip" install -q --upgrade pip
+          "$AIMTRK_VENV/bin/pip" install -q west numpy scipy matplotlib ruff
+
+      - name: Cache Zephyr and SDK
+        uses: actions/cache@v4
+        with:
+          path: |
+            ${{ github.workspace }}/.west
+            ${{ github.workspace }}/zephyr
+            ${{ github.workspace }}/modules
+            ~/zephyr-sdk-*
+          key: zephyr-${{ hashFiles('aimtrk-fw/west.yml') }}-v1
+
+      - name: West workspace and SDK
+        run: |
+          source "$AIMTRK_VENV/bin/activate"
+          cd "$AIMTRK_WS"
+          [ -d .west ] || west init -l aimtrk-fw
+          west update -n -o=--depth=1
+          west packages pip --install
+          ls -d ~/zephyr-sdk-* >/dev/null 2>&1 || west sdk install -t arm-zephyr-eabi
+
+      - name: Python lint
+        run: |
+          source "$AIMTRK_VENV/bin/activate"
+          cd aimtrk-fw
+          ruff check sim tools --line-length 120
+
+      - name: "Reference lane: screen inside the frame (SPEC 2a)"
+        run: |
+          source "$AIMTRK_VENV/bin/activate"
+          python3 aimtrk-fw/sim/camsim.py lane
+
+      - name: "C vs NumPy cross-check, centroid accuracy curve (SPEC 9.2, P01 budget line)"
+        run: bash aimtrk-fw/scripts/crosscheck.sh --frames 40
+
+      - name: Unit tests (ztest on native_sim) with coverage
+        run: bash aimtrk-fw/scripts/test-unit.sh --coverage --coverage-tool gcovr --coverage-basedir "$AIMTRK_WS/aimtrk-fw"
+
+      - name: "Coverage of aimtrk >= 90 % lines"
+        run: |
+          source "$AIMTRK_VENV/bin/activate"
+          python3 - <<'EOF'
+          import json, os
+          d = json.load(open(os.path.join(os.environ["AIMTRK_WS"], "twister-out-aimtrk", "coverage_summary.json")))
+          files = [f for f in d["files"] if f["filename"].startswith("aimtrk/")]
+          cov = sum(f["line_covered"] for f in files) / sum(f["line_total"] for f in files)
+          for f in files:
+              print(f'{f["filename"]:28s} {f["line_percent"]:5.1f} %')
+          print(f"aimtrk line coverage {100 * cov:.1f} %")
+          assert cov >= 0.90, "below the 90 % target"
+          EOF
+
+      - name: Upload test reports and results
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: reports
+          path: |
+            ${{ github.workspace }}/twister-out-aimtrk/coverage/
+            ${{ github.workspace }}/twister-out-aimtrk/coverage_summary.json
+            ${{ github.workspace }}/twister-out-aimtrk/twister.xml
+            ${{ github.workspace }}/twister-out-aimtrk/twister.json
+            aimtrk-fw/results/
+          if-no-files-found: warn

@@ -1,0 +1,19 @@
+# West manifest (T2 topology): this repository is the manifest repository.
+# Same Zephyr revision as S1 and S2. S3 uses Zephyr only for the ztest unit
+# tests of the aimtrk library on native_sim; the module list is kept the same
+# so the three projects can share one west workspace.
+manifest:
+  self:
+    path: aimtrk-fw
+  remotes:
+    - name: zephyrproject-rtos
+      url-base: https://github.com/zephyrproject-rtos
+  projects:
+    - name: zephyr
+      remote: zephyrproject-rtos
+      revision: c605ea46e15fb9bdd518670258a8a52d8850d8f4
+      import:
+        name-allowlist:
+          - cmsis_6
+          - hal_stm32
+          - hal_st
