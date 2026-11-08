@@ -96,7 +96,9 @@ ZTEST(match, test_aim_and_hit)
 		at_match_frame(&m, k, ((k % 2) == 0) ? &s : NULL, ((k % 2) == 0) ? 1 : 0);
 		int n = settle(k);
 
-		if ((k % 2) == 0) {
+		if (k == 100) {
+			zassert_equal(n, 0, "the first sighting is only a candidate");
+		} else if ((k % 2) == 0) {
 			zassert_equal(n, 1, "k %lld", (long long)k);
 			zassert_equal(ev[0].kind, AT_EV_AIM);
 			zassert_equal(ev[0].node, 1);
@@ -198,8 +200,10 @@ ZTEST(match, test_two_weapons_same_frame)
 		at_mspot s = ((k % 2) == 0) ? spot(-500.0F, 0.0F) : spot(500.0F, 100.0F);
 
 		at_match_frame(&m, k, &s, 1);
-		zassert_equal(settle(k), 1);
-		zassert_equal(ev[0].node, ((k % 2) == 0) ? 1 : 2);
+		zassert_equal(settle(k), (k < 2) ? 0 : 1, "k %lld", (long long)k);
+		if (k >= 2) {
+			zassert_equal(ev[0].node, ((k % 2) == 0) ? 1 : 2);
+		}
 	}
 	zassert_ok(at_match_shot(&m, 2, 7, break_for(10)));
 	zassert_ok(at_match_shot(&m, 1, 9, break_for(10)));
@@ -348,4 +352,107 @@ ZTEST(match, test_gap_and_limits)
 		zassert_ok(at_match_shot(&m, 1, (uint16_t)i, break_for(1000 + i)));
 	}
 	zassert_equal(at_match_shot(&m, 1, 99, break_for(2000)), -1);
+}
+
+/* A weak spot cannot start a track: interference does not become a weapon's aim. */
+ZTEST(match, test_min_init_snr)
+{
+	setup(1);
+	at_mspot weak = spot(800.0F, -400.0F);
+
+	weak.snr = 15.0F;
+	at_match_frame(&m, 0, &weak, 1);
+	zassert_equal(settle(0), 0, "no AIM from a weak stray");
+	zassert_false(m.track[0].active);
+	zassert_equal(m.stats.stray_spots, 1U);
+
+	/* The real emitter (strong) is the candidate, even with the weak stray in the frame ... */
+	at_mspot both[2] = {weak, spot(100.0F, 50.0F)};
+
+	at_match_frame(&m, 1, NULL, 0);
+	(void)settle(1);
+	at_match_frame(&m, 2, both, 2);
+	zassert_equal(settle(2), 0, "candidate only");
+	zassert_true(m.cand[0]);
+	/* ... and the weapon's next slot frame confirms it. */
+	at_mspot next = spot(101.0F, 50.0F);
+
+	at_match_frame(&m, 3, NULL, 0);
+	(void)settle(3);
+	at_match_frame(&m, 4, &next, 1);
+	zassert_equal(settle(4), 1);
+	zassert_within(ev[0].x_mm, 101.0F, 1e-4F);
+	zassert_true(m.track[0].active);
+	zassert_equal(m.stats.confirmed, 1U);
+}
+
+/* A stray seen once is never confirmed: no track, no AIM; a shot then takes only the candidate's spot. */
+ZTEST(match, test_unconfirmed_stray)
+{
+	setup(1);
+	at_mspot stray = spot(-300.0F, 200.0F);
+
+	at_match_frame(&m, 0, &stray, 1);
+	zassert_equal(settle(0), 0);
+	at_match_frame(&m, 1, NULL, 0);
+	(void)settle(1);
+	/* The stray is gone; the weapon's real spot is far away: a new candidate, no AIM. */
+	at_mspot real = spot(500.0F, -100.0F);
+
+	at_match_frame(&m, 2, &real, 1);
+	zassert_equal(settle(2), 0);
+	zassert_within(m.cand_x[0], 500.0F, 1e-4F);
+	/* A shot (hidden) with a stray far from the candidate: NO_SPOT, not the stray. */
+	zassert_ok(at_match_shot(&m, 1, 1, break_for(3)));
+	at_match_frame(&m, 3, &stray, 1);
+	zassert_equal(settle(3), 1);
+	zassert_equal(ev[0].result, AT_HIT_NO_SPOT);
+	zassert_false(m.track[0].active);
+
+	/* The candidate expires if it is not seen again within two slot cycles. */
+	for (int64_t k = 4; k < 9; k++) {
+		at_match_frame(&m, k, NULL, 0);
+		(void)settle(k);
+	}
+	at_mspot again = spot(500.0F, -100.0F);
+
+	at_match_frame(&m, 9, NULL, 0);
+	(void)settle(9);
+	at_match_frame(&m, 10, &again, 1);
+	zassert_equal(settle(10), 0, "the old candidate expired: this is a new one");
+}
+
+/* A track held by the wrong spot lets go: three slot frames in a row with its weapon's spot elsewhere. */
+ZTEST(match, test_reacquire)
+{
+	setup(1);
+	for (int64_t k = 0; k < 6; k += 2) {
+		at_mspot s = spot(0.0F, 0.0F);
+
+		at_match_frame(&m, k, &s, 1);
+		zassert_equal(settle(k), (k == 0) ? 0 : 1, "first sighting: candidate");
+		at_match_frame(&m, k + 1, NULL, 0);
+		(void)settle(k + 1);
+	}
+	/* The weapon's spot is now 600 mm away (the track was wrong, or the aim jumped). */
+	int aims = 0;
+
+	for (int64_t k = 6; k < 16; k += 2) {
+		at_mspot s = spot(600.0F, 0.0F);
+
+		at_match_frame(&m, k, &s, 1);
+		int n = settle(k);
+
+		at_match_frame(&m, k + 1, NULL, 0);
+		(void)settle(k + 1);
+		if (n == 1) {
+			zassert_within(ev[0].x_mm, 600.0F, 1e-4F);
+			aims++;
+		}
+		if (k < 12) {
+			zassert_equal(n, 0, "frame %lld: still gated out", (long long)k);
+		}
+	}
+	zassert_equal(m.stats.reacquired, 1U);
+	zassert_equal(aims, 1, "after three misses: a candidate at frame 12, confirmed with an AIM at 14");
 }

@@ -44,6 +44,7 @@ FRAME_US = 10_000
 EXPOSURE_START_US = 4_500
 PULSE_START_US = 4_750
 PULSE_US = 500
+SAT_MARGIN_PX = 3  # a spot (sigma about 1.2 px) this close to saturated background is not visible
 MARGIN_US = 2_000  # aimtrk/match.h AT_STROBE_MARGIN_US
 SYNC_PERIOD_US = 10_000
 
@@ -165,6 +166,14 @@ class RegionRenderer:
             probe = cam.add_spot(np.zeros((1, 1), np.float32), dataclasses.replace(s, total_dn=0.0), exposure)
             u, v = probe["u"], probe["v"]
             hidden = occ is not None and occ[0] <= v < occ[1] and occ[2] <= u < occ[3]
+            # On a saturated background (the sunlit window) a spot cannot be seen at all, nor one that
+            # straddles its edge: saturated pixels within SAT_MARGIN_PX (2.5 spot sigmas) of the centre.
+            iu, iv = int(round(u)), int(round(v))
+            if 0 <= iu < w and 0 <= iv < h:
+                rs = slice(max(iv - SAT_MARGIN_PX, 0), min(iv + SAT_MARGIN_PX + 1, h))
+                cs = slice(max(iu - SAT_MARGIN_PX, 0), min(iu + SAT_MARGIN_PX + 1, w))
+                level = np.asarray(cam.ambient[rs, cs], np.float32) + interf.signal(j, h, w, rs, cs)
+                hidden = hidden or float(level.max()) + cam.sensor.black_dn >= 250.0
             r0, r1 = max(int(v) - 12, 0), min(int(v) + 13, h)
             c0, c1 = max(int(u) - 12, 0), min(int(u) + 13, w)
             if hidden or r1 <= r0 or c1 <= c0:

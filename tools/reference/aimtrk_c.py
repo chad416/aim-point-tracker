@@ -43,7 +43,8 @@ class Spot(C.Structure):
 class Stats(C.Structure):
     _fields_ = [("sigma", C.c_float), ("bg_mean", C.c_float), ("runs", C.c_uint32),
                 ("blobs", C.c_uint32), ("spots", C.c_uint32), ("rejected", C.c_uint32 * 4),
-                ("frozen_cells", C.c_uint32), ("snapped_cells", C.c_uint32), ("overflow", C.c_uint8), ("learning", C.c_bool)]
+                ("frozen_cells", C.c_uint32), ("snapped_cells", C.c_uint32), ("recovered", C.c_uint32),
+                ("overflow", C.c_uint8), ("learning", C.c_bool)]
 
 
 class CWin(C.Structure):

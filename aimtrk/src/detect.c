@@ -3,12 +3,13 @@
  * frame (sigma) and per spot (centroid).
  */
 #include <math.h>
+#include <stdlib.h>
 #include <string.h>
 
 #include "aimtrk/detect.h"
 
-#define NONE      0xFFFFU
 #define DROPPED   0xFFFEU
+#define AREA_CAP  0xFFF0U /* blob areas while summing (blob_of), below DROPPED */
 #define HIST_BINS 511 /* frame - background, -255..255 */
 #define HIST_ZERO 255
 #define NOISE_STEP 4  /* noise sample: every 4th pixel of every 4th row */
@@ -29,7 +30,7 @@ void at_detect_cfg_default(at_detect_cfg *cfg, uint16_t width, uint16_t height)
 		.min_snr = 8.0F,
 		.sat_level = 255,
 		.max_runs = 8192,
-		.max_blobs = 256,
+		.max_blobs = 1024, /* a scene change can leave hundreds of spot-sized fragments (week 4) */
 	};
 }
 
@@ -91,6 +92,8 @@ int at_detect_init(at_detect *d, const at_detect_cfg *cfg, void *mem, size_t mem
 
 	base += (8U - ((uintptr_t)base & 7U)) & 7U;
 	(void)layout(cfg, off);
+	/* Touch all of it now: the page faults happen at start-up, not in the first frames (P05). */
+	memset(mem, 0, mem_size);
 
 	memset(d, 0, sizeof(*d));
 	d->cfg = *cfg;
@@ -348,6 +351,188 @@ static void freeze_cells(at_detect *d, const at_blob *b)
 	}
 }
 
+#define RECOVER_R        6    /* window half-size around a peak found inside a large blob, px */
+#define RECOVER_PEAKS    4    /* peaks looked at per large blob */
+#define RECOVER_CONTRAST 2.0  /* a peak above its surroundings, in detection thresholds */
+#define RECOVER_MAX_SIG  2.5F /* a recovered spot is spot-sized: sig_major at most this, px */
+
+static bool near_peak(const int *px, const int *py, int n, int x, int y)
+{
+	for (int i = 0; i < n; i++) {
+		if ((abs(x - px[i]) <= RECOVER_R) && (abs(y - py[i]) <= RECOVER_R)) {
+			return true;
+		}
+	}
+	return false;
+}
+
+/*
+ * Step 6: spots inside a blob that was too large. The brightest pixels of the
+ * blob (above the background) are taken in turn, and each is measured against
+ * its own surroundings: the brightest pixel on the border of a
+ * (2 RECOVER_R + 1)^2 window around it. A spot stands out from that by at
+ * least RECOVER_CONTRAST detection thresholds and is spot-sized; noise on the
+ * bright side of a scene change does not. It is located against that level.
+ * Returns the new spot count.
+ */
+static int recover(at_detect *d, const at_blob *b, int nruns, const uint8_t *img, size_t stride, float sigma,
+		   int32_t delta256, at_spot *spots, int nspots, int max_spots)
+{
+	const at_detect_cfg *cfg = &d->cfg;
+	int px[RECOVER_PEAKS], py[RECOVER_PEAKS];
+	int np = 0;
+	double delta = (double)delta256 / 256.0;
+	double sig_n = (sigma > 0.5F) ? (double)sigma : 0.5;
+	uint8_t core[(2 * RECOVER_R + 1) * (2 * RECOVER_R + 1)];
+
+	if (((2 * RECOVER_R) + 1) > (cfg->max_extent + 2)) {
+		return nspots; /* window tables too small for this configuration */
+	}
+	while (np < RECOVER_PEAKS) {
+		double best = 0.0;
+		int bx = -1, by = -1;
+
+		for (int i = 0; i < nruns; i++) {
+			const at_run *r = &d->runs[i];
+
+			if (r->label != b->root) {
+				continue;
+			}
+			const uint8_t *row = img + ((size_t)r->y * stride);
+
+			for (int x = r->x0; x <= r->x1; x++) {
+				double ex = (double)row[x] - (double)at_detect_bg(d, x, r->y);
+
+				if ((ex > best) && !near_peak(px, py, np, x, r->y)) {
+					best = ex;
+					bx = x;
+					by = r->y;
+				}
+			}
+		}
+		if ((bx < 0) || (best <= (RECOVER_CONTRAST * delta))) {
+			break; /* nothing left that could stand out by enough */
+		}
+		px[np] = bx;
+		py[np] = by;
+		np++;
+
+		int x0 = (bx > RECOVER_R) ? (bx - RECOVER_R) : 0;
+		int y0 = (by > RECOVER_R) ? (by - RECOVER_R) : 0;
+		int x1 = ((bx + RECOVER_R) < cfg->width) ? (bx + RECOVER_R) : (cfg->width - 1);
+		int y1 = ((by + RECOVER_R) < cfg->height) ? (by + RECOVER_R) : (cfg->height - 1);
+		int w = x1 - x0 + 1;
+		int hh = y1 - y0 + 1;
+		double ring = -HUGE_VAL;
+
+		for (int r = 0; r < hh; r++) {
+			const uint8_t *row = img + ((size_t)(y0 + r) * stride);
+
+			for (int c = 0; c < w; c++) {
+				if ((r == 0) || (c == 0) || (r == (hh - 1)) || (c == (w - 1))) {
+					double ex = (double)row[x0 + c] - (double)at_detect_bg(d, x0 + c, y0 + r);
+
+					ring = (ex > ring) ? ex : ring;
+				}
+			}
+		}
+		double contrast = best - ring;
+
+		if ((contrast <= (RECOVER_CONTRAST * delta)) || ((contrast / sig_n) < (double)cfg->min_snr)) {
+			continue;
+		}
+		float level = (float)ring;
+		int area = 0;
+
+		for (int r = 0; r < hh; r++) {
+			const uint8_t *row = img + ((size_t)(y0 + r) * stride);
+
+			for (int c = 0; c < w; c++) {
+				float lvl = at_detect_bg(d, x0 + c, y0 + r) + level;
+
+				d->bgw[(r * w) + c] = lvl;
+				core[(r * w) + c] = (((double)row[x0 + c] - (double)lvl) > delta) ? 1U : 0U;
+				area += core[(r * w) + c];
+			}
+		}
+		if (area < cfg->min_area) {
+			continue;
+		}
+		/* The spot's pixels and a one-pixel border. */
+		memset(d->mask, 0, (size_t)w * (size_t)hh);
+		for (int r = 0; r < hh; r++) {
+			for (int c = 0; c < w; c++) {
+				if (core[(r * w) + c] == 0U) {
+					continue;
+				}
+				for (int rr = (r > 0) ? (r - 1) : 0; (rr <= (r + 1)) && (rr < hh); rr++) {
+					for (int cc = (c > 0) ? (c - 1) : 0; (cc <= (c + 1)) && (cc < w); cc++) {
+						d->mask[(rr * w) + cc] = 1U;
+					}
+				}
+			}
+		}
+		at_cwin win = {.px = img + ((size_t)y0 * stride) + (size_t)x0, .stride = stride, .x0 = x0, .y0 = y0,
+			       .w = w, .h = hh, .mask = d->mask, .bg = d->bgw, .bg_const = 0.0F};
+		at_spot s;
+
+		if ((at_centroid(&win, sigma, cfg->sat_level, &s) != 0) || (s.snr < cfg->min_snr) ||
+		    (s.sig_minor <= 0.0F) || ((s.sig_major / s.sig_minor) > cfg->max_elong) ||
+		    (s.sig_major > RECOVER_MAX_SIG)) {
+			continue;
+		}
+		if (nspots >= max_spots) {
+			d->stats.overflow |= AT_OVF_SPOTS;
+			continue;
+		}
+		s.area = (uint16_t)area;
+		s.flags |= AT_SPOT_ON_CHANGE;
+		if ((x0 == 0) || (y0 == 0) || (x1 == (cfg->width - 1)) || (y1 == (cfg->height - 1))) {
+			s.flags |= AT_SPOT_EDGE;
+		}
+		spots[nspots++] = s;
+		d->stats.recovered++;
+	}
+	return nspots;
+}
+
+/*
+ * A spot stands out from its surroundings: the brightest pixel on the ring
+ * RECOVER_R out (the border of the (2 RECOVER_R + 1)^2 window around it; where
+ * the image border cuts the window, that side has no ring) is at most
+ * half its peak, or the peak is at least min_snr noise sigmas above it. A
+ * fragment of a scene change whose step is about one detection threshold high
+ * (noise splits it into small blobs) fails: its surroundings are the step
+ * itself (week 4, the demo session at an 8 DN projector leak).
+ */
+static bool stands_out(const at_detect *d, const uint8_t *img, size_t stride, const at_spot *s, float sigma)
+{
+	const at_detect_cfg *cfg = &d->cfg;
+	int cx = (int)floor((double)s->x + 0.5);
+	int cy = (int)floor((double)s->y + 0.5);
+	int x0 = (cx > RECOVER_R) ? (cx - RECOVER_R) : 0;
+	int y0 = (cy > RECOVER_R) ? (cy - RECOVER_R) : 0;
+	int x1 = ((cx + RECOVER_R) < cfg->width) ? (cx + RECOVER_R) : (cfg->width - 1);
+	int y1 = ((cy + RECOVER_R) < cfg->height) ? (cy + RECOVER_R) : (cfg->height - 1);
+	double ring = 0.0; /* no ring at all (a window cut on every side): nothing to compare with */
+
+	for (int y = y0; y <= y1; y++) {
+		const uint8_t *row = img + ((size_t)y * stride);
+
+		for (int x = x0; x <= x1; x++) {
+			if ((abs(y - cy) == RECOVER_R) || (abs(x - cx) == RECOVER_R)) {
+				double ex = (double)row[x] - (double)at_detect_bg(d, x, y);
+
+				ring = (ex > ring) ? ex : ring;
+			}
+		}
+	}
+	double peak = (double)s->peak;
+	double sig_n = (sigma > 0.5F) ? (double)sigma : 0.5;
+
+	return (ring <= (0.5 * peak)) || ((peak - ring) >= ((double)cfg->min_snr * sig_n));
+}
+
 int at_detect_frame(at_detect *d, const uint8_t *img, size_t stride, at_spot *spots, int max_spots)
 {
 	const at_detect_cfg *cfg = &d->cfg;
@@ -408,37 +593,50 @@ int at_detect_frame(at_detect *d, const uint8_t *img, size_t stride, at_spot *sp
 	int nruns = scan(d, img, stride);
 	int nblobs = 0;
 
+	/*
+	 * Areas first, summed at each root in blob_of, so that a blob too small to
+	 * be a spot never takes a place in the blob table: a scene change about
+	 * one threshold high breaks up into hundreds of them in the noise, and a
+	 * full table dropped every blob after them, spots included (week 4, IT06
+	 * at 8 DN). A blob's root is its first run (unite() keeps the smaller
+	 * index), so the roots come in raster order. The roots are final now and
+	 * stay in the labels, so window() can compare them directly.
+	 */
 	for (int i = 0; i < nruns; i++) {
-		d->blob_of[i] = NONE;
+		d->runs[i].label = find(d->runs, (uint16_t)i);
+		d->blob_of[i] = 0U;
+	}
+	for (int i = 0; i < nruns; i++) {
+		const at_run *r = &d->runs[i];
+		uint32_t a = (uint32_t)d->blob_of[r->label] + (uint32_t)(r->x1 - r->x0 + 1);
+
+		d->blob_of[r->label] = (uint16_t)((a < AREA_CAP) ? a : AREA_CAP);
 	}
 	for (int i = 0; i < nruns; i++) {
 		at_run *r = &d->runs[i];
-		uint16_t root = find(d->runs, (uint16_t)i);
 
-		if (d->blob_of[root] == NONE) {
-			if (nblobs >= cfg->max_blobs) {
+		if (r->label == (uint16_t)i) {
+			if (d->blob_of[i] < cfg->min_area) {
+				d->stats.rejected[AT_REJ_SMALL]++;
+				d->blob_of[i] = DROPPED;
+			} else if (nblobs >= cfg->max_blobs) {
 				d->stats.overflow |= AT_OVF_BLOBS;
-				d->blob_of[root] = DROPPED;
+				d->blob_of[i] = DROPPED;
 			} else {
-				d->blobs[nblobs] = (at_blob){root, r->x0, r->x1, r->y, r->y, 0U};
-				d->blob_of[root] = (uint16_t)nblobs++;
+				d->blobs[nblobs] = (at_blob){(uint16_t)i, r->x0, r->x1, r->y, r->y, 0U};
+				d->blob_of[i] = (uint16_t)nblobs++;
 			}
 		}
-		if (d->blob_of[root] == DROPPED) {
+		if (d->blob_of[r->label] == DROPPED) {
 			continue;
 		}
-		at_blob *b = &d->blobs[d->blob_of[root]];
+		at_blob *b = &d->blobs[d->blob_of[r->label]];
 
 		b->area += (uint32_t)(r->x1 - r->x0 + 1);
 		b->x0 = (r->x0 < b->x0) ? r->x0 : b->x0;
 		b->x1 = (r->x1 > b->x1) ? r->x1 : b->x1;
 		b->y1 = r->y; /* runs come in row order */
 	}
-	/* Roots are final now; store them so window() can compare labels directly. */
-	for (int i = 0; i < nruns; i++) {
-		d->runs[i].label = find(d->runs, (uint16_t)i);
-	}
-
 	/* 5: rejection and centroids. */
 	memset(d->freeze, 0, (size_t)ncells);
 	for (int i = 0; i < nblobs; i++) {
@@ -446,12 +644,9 @@ int at_detect_frame(at_detect *d, const uint8_t *img, size_t stride, at_spot *sp
 		int ext_w = b->x1 - b->x0 + 1;
 		int ext_h = b->y1 - b->y0 + 1;
 
-		if (b->area < cfg->min_area) {
-			d->stats.rejected[AT_REJ_SMALL]++;
-			continue;
-		}
 		if ((b->area > cfg->max_area) || (ext_w > cfg->max_extent) || (ext_h > cfg->max_extent)) {
 			d->stats.rejected[AT_REJ_LARGE]++;
+			nspots = recover(d, b, nruns, img, stride, sigma, delta256, spots, nspots, max_spots);
 			continue;
 		}
 		at_cwin win;
@@ -466,6 +661,10 @@ int at_detect_frame(at_detect *d, const uint8_t *img, size_t stride, at_spot *sp
 		}
 		if ((s.sig_minor <= 0.0F) || ((s.sig_major / s.sig_minor) > cfg->max_elong)) {
 			d->stats.rejected[AT_REJ_ELONGATED]++;
+			continue;
+		}
+		if (!stands_out(d, img, stride, &s, sigma)) {
+			d->stats.rejected[AT_REJ_WEAK]++; /* weak against its own surroundings */
 			continue;
 		}
 		freeze_cells(d, b);

@@ -1,6 +1,6 @@
 """IT06 interference (SPEC F02, P03), through aim_host.
 
-The interference set (SPEC §8) at three projector-leak levels: the projected
+The interference set (SPEC §8) at four projector-leak levels: the projected
 scenario leaking through the 850 nm filter (a smooth scene with a target
 silhouette moving across it, flickering), a sunlit window, glints from a
 target frame, extra hot pixels, and a person crossing in front of the screen.
@@ -13,10 +13,10 @@ One weapon sweeps over the whole screen and fires 60 shots on the way.
 
 The leak levels are not measured projector data (SPEC §12): they bracket a
 dark lane (4 DN), a typical one (12 DN) and a bright one (30 DN) against the
-8 DN detection floor. P03 is required up to 12 DN. At 30 DN the moving
-silhouette swallows spots that land on its edges; the test records how many
-and still requires no false HIT: it sets the leak limit for the lane (the
-850 nm filter and the projector), SPEC §12.
+8 DN detection floor, and 8 DN itself: there the moving silhouette's step is
+about one detection threshold high and noise breaks it into hundreds of small
+fragments (found by the demo session, week 4; SPEC §12). P03 is required at
+all four levels.
 """
 from __future__ import annotations
 
@@ -32,7 +32,7 @@ T0 = 1000.0
 N_SHOTS = 60
 
 
-@pytest.mark.parametrize("leak_dn", [4.0, 12.0, 30.0])  # P03 required at 4 and 12 DN
+@pytest.mark.parametrize("leak_dn", [4.0, 8.0, 12.0, 30.0])
 def test_interference(lib, calibration, tmp_path, leak_dn):
     cam = LN.camsim.Camera()  # its own camera: the extra hot pixels must not leak into other tests
     breaks = [T0 + 0.5 + 0.12 * i for i in range(N_SHOTS)]
@@ -78,5 +78,4 @@ def test_interference(lib, calibration, tmp_path, leak_dn):
     assert hidden > 0, "the person must hide some shots"
     assert hidden_ok == hidden
     assert false_hits == 0
-    if leak_dn <= 12.0:
-        assert ok >= 0.999 * visible
+    assert ok >= 0.999 * visible

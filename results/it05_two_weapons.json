@@ -21,10 +21,10 @@
  },
  "tracker_frames": {
   "HIT": 220,
-  "AIM": 1519,
+  "AIM": 1559,
   "TRK_STATUS": 17
  },
- "tracker_bus_load_pct": 2.5211666666666663,
+ "tracker_bus_load_pct": 2.5773571428571427,
  "worst_case_frames_per_s": {
   "SYNC": 100,
   "SHOT_EVENT+DETAIL": 60.0,
@@ -38,11 +38,13 @@
  "match": {
   "frames": 1680,
   "dropped": 0,
-  "stray_spots": 50,
+  "stray_spots": 6,
   "shots": 220,
   "late_shots": 0,
   "ambiguous": 60,
-  "unknown_node": 0
+  "unknown_node": 0,
+  "reacquired": 2,
+  "confirmed": 4
  },
  "failures": []
 }

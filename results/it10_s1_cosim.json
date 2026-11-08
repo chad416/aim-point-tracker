@@ -1,0 +1,91 @@
+{
+ "pulses": 306,
+ "shots": 8,
+ "node1_pulses": 153,
+ "node2_pulses": 153,
+ "pulse_start_error_us": {
+  "min": -30,
+  "max": 236
+ },
+ "pulse_width_us": {
+  "min": 563,
+  "max": 610
+ },
+ "pulse_inside_exposure_min": 0.865,
+ "pulses_past_exposure_end": 8,
+ "exposure_overrun_us_max": 80,
+ "hits": [
+  {
+   "node": 1,
+   "shot_no": 1,
+   "k": 600,
+   "result": 0,
+   "error_mm": 0.165,
+   "latency_ms": 9.6
+  },
+  {
+   "node": 2,
+   "shot_no": 1,
+   "k": 625,
+   "result": 0,
+   "error_mm": 0.099,
+   "latency_ms": 9.6
+  },
+  {
+   "node": 1,
+   "shot_no": 2,
+   "k": 650,
+   "result": 0,
+   "error_mm": 0.13,
+   "latency_ms": 9.5
+  },
+  {
+   "node": 2,
+   "shot_no": 2,
+   "k": 675,
+   "result": 0,
+   "error_mm": 0.167,
+   "latency_ms": 9.5
+  },
+  {
+   "node": 1,
+   "shot_no": 3,
+   "k": 700,
+   "result": 0,
+   "error_mm": 0.186,
+   "latency_ms": 10.4
+  },
+  {
+   "node": 2,
+   "shot_no": 3,
+   "k": 725,
+   "result": 0,
+   "error_mm": 0.121,
+   "latency_ms": 10.5
+  },
+  {
+   "node": 1,
+   "shot_no": 4,
+   "k": 750,
+   "result": 0,
+   "error_mm": 0.026,
+   "latency_ms": 10.0
+  },
+  {
+   "node": 2,
+   "shot_no": 4,
+   "k": 775,
+   "result": 0,
+   "error_mm": 0.086,
+   "latency_ms": 10.3
+  }
+ ],
+ "aims": {
+  "1": 148,
+  "2": 148
+ },
+ "stray_spots": 0,
+ "frames": 318,
+ "can_in": 458,
+ "drift_ppm": -40.12
+}

@@ -4,6 +4,8 @@ on:
   push:
   pull_request:
   workflow_dispatch:
+  schedule:
+    - cron: "17 3 * * 1"  # Mondays: also the 100 000-frame run (IT09)
 
 # Layout: the repo is checked out to <workspace>/aimtrk-fw and is the west
 # manifest repository (west.yml, self.path: aimtrk-fw); <workspace> is the west
@@ -93,8 +95,22 @@ jobs:
           assert cov >= 0.90, "below the 90 % target"
           EOF
 
-      - name: "Integration tests IT01-IT08 on rendered sequences (SPEC 9.3)"
+      - name: "Integration tests IT01-IT08, IT10 (S1 replay) on rendered sequences (SPEC 9.3)"
         run: bash aimtrk-fw/scripts/test-it.sh
+
+      - name: "IT09: 100 000 frames, P03 and P05 (weekly and on demand)"
+        if: github.event_name == 'schedule' || github.event_name == 'workflow_dispatch'
+        run: |
+          source "$AIMTRK_VENV/bin/activate"
+          cd aimtrk-fw
+          python3 -m pytest tests/integration/test_it09_long_run.py -m long -v -p no:cacheprovider
+
+      - name: "Demo session and lane view (SPEC 10)"
+        run: |
+          source "$AIMTRK_VENV/bin/activate"
+          cd aimtrk-fw
+          python3 tools/lane/demo_session.py --out build/session
+          python3 tools/lane/lane_view.py build/session --png build/session/lane_view.png
 
       - name: Upload test reports and results
         if: always()
@@ -108,4 +124,5 @@ jobs:
             ${{ github.workspace }}/twister-out-aimtrk/twister.json
             aimtrk-fw/results/
             aimtrk-fw/build/aim_host
+            aimtrk-fw/build/session/
           if-no-files-found: warn

@@ -7,16 +7,17 @@
  "shots_hidden": 3,
  "hidden_no_spot": 3,
  "false_hits": 0,
- "stray_spots": 508,
- "stray_spots_per_1000_frames": 635.0,
+ "stray_spots": 3,
+ "stray_spots_per_1000_frames": 3.75,
  "rejected": {
-  "small": 96679,
-  "large": 932,
-  "weak": 0,
-  "elongated": 2364
+  "small": 96327,
+  "large": 933,
+  "weak": 470,
+  "elongated": 2363
  },
  "proc_ms": {
-  "mean": 0.913,
-  "max": 1.559
+  "mean": 1.072,
+  "max": 2.453,
+  "wall_max": 2.248
  }
 }

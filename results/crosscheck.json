@@ -2,11 +2,12 @@
   "frames": 40,
   "seed": 3,
   "mismatches": 0,
-  "spots_compared": 312,
+  "spots_compared": 320,
   "screen_spots": 234,
   "screen_spots_found": 234,
   "saturated": 108,
   "rim_fits": 108,
+  "recovered_in_large_blobs": 8,
   "rejected": {
     "small": 780,
     "large": 8,
@@ -15,8 +16,8 @@
   },
   "truth_rms_px_unsaturated": 0.0391,
   "c_ms_per_frame": {
-    "mean": 1.052,
-    "max": 1.208
+    "mean": 1.076,
+    "max": 1.46
   },
   "geometry_vs_opencv": {
     "distort_max_diff": 1.1102230246251565e-16,

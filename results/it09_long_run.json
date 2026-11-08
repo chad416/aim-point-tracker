@@ -1,0 +1,142 @@
+{
+ "frames": 100000,
+ "shots": 1994,
+ "hits": 1994,
+ "visible": 1954,
+ "ok": 1953,
+ "detection_pct": 99.94882292732855,
+ "hit_error_mm": {
+  "rms": 0.15624682535958437,
+  "max": 2.8143800279166773
+ },
+ "hidden": 40,
+ "hidden_no_spot": 40,
+ "ambiguous": 0,
+ "false_hits": 0,
+ "aim_frames": 96798,
+ "stray_spots_per_1000_frames": 20.58,
+ "proc_ms": {
+  "mean": 1.047,
+  "max": 13.435,
+  "wall_max": 12.317
+ },
+ "heap_bytes": {
+  "after_first_frame": 10800,
+  "end": 10800
+ },
+ "frame_time_residual_max_us": 44,
+ "status_frames": 1000,
+ "status_worst_ms_max": 13.4,
+ "misses": [
+  {
+   "node": 2,
+   "shot_no": 934,
+   "k": 193545,
+   "result": 1,
+   "d_mm": null
+  }
+ ],
+ "proc_ms_percentiles": {
+  "50": 1.006,
+  "99": 1.771,
+  "99.9": 2.413,
+  "99.99": 3.921
+ },
+ "slowest_frames": [
+  {
+   "k": 185837,
+   "proc_ms": 13.435,
+   "spots": 1,
+   "rejected": [
+    119,
+    1,
+    0,
+    3
+   ]
+  },
+  {
+   "k": 185728,
+   "proc_ms": 5.936,
+   "spots": 1,
+   "rejected": [
+    120,
+    1,
+    0,
+    3
+   ]
+  },
+  {
+   "k": 185807,
+   "proc_ms": 5.472,
+   "spots": 1,
+   "rejected": [
+    130,
+    1,
+    0,
+    3
+   ]
+  },
+  {
+   "k": 121577,
+   "proc_ms": 5.465,
+   "spots": 1,
+   "rejected": [
+    119,
+    1,
+    0,
+    3
+   ]
+  },
+  {
+   "k": 121570,
+   "proc_ms": 5.2,
+   "spots": 1,
+   "rejected": [
+    119,
+    1,
+    0,
+    3
+   ]
+  },
+  {
+   "k": 185722,
+   "proc_ms": 4.994,
+   "spots": 1,
+   "rejected": [
+    119,
+    1,
+    0,
+    3
+   ]
+  },
+  {
+   "k": 149006,
+   "proc_ms": 4.647,
+   "spots": 1,
+   "rejected": [
+    119,
+    1,
+    0,
+    3
+   ]
+  },
+  {
+   "k": 170632,
+   "proc_ms": 4.298,
+   "spots": 1,
+   "rejected": [
+    119,
+    1,
+    0,
+    3
+   ]
+  }
+ ],
+ "typical_frame_rejected_mean": [
+  122.5,
+  1.0,
+  0.2,
+  3.0
+ ],
+ "reacquired": 0
+}

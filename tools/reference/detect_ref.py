@@ -15,7 +15,8 @@ from scipy import ndimage
 
 CELL = 4
 MAD_TO_SIGMA = 1.4826
-SAT, RIM, RIM_FAILED, EDGE = 0x01, 0x02, 0x04, 0x08
+SAT, RIM, RIM_FAILED, EDGE, ON_CHANGE = 0x01, 0x02, 0x04, 0x08, 0x10
+RECOVER_R, RECOVER_PEAKS, RECOVER_CONTRAST, RECOVER_MAX_SIG = 6, 4, 2.0, 2.5
 REJECT_NAMES = ("small", "large", "weak", "elongated")
 
 DEFAULT_CFG = dict(bg_shift=4, k_sigma=6.0, t_min=8.0, min_area=3, max_area=300, max_extent=24,
@@ -122,6 +123,68 @@ class DetectRef:
     def learn(self, img: np.ndarray) -> None:
         self.bg256 = self.cell_sums(img) * 16
 
+    def _recover(self, img: np.ndarray, blob: np.ndarray, bgw_full: np.ndarray, delta256: int,
+                 sigma: float) -> list[dict]:
+        """Step 6 (SPEC 6.1, week 4): spots inside a blob rejected as too large, each measured against
+        the brightest pixel on the border of its window."""
+        c = self.cfg
+        ys, xs = np.nonzero(blob)  # raster order, as the C run scan
+        ex = img[ys, xs].astype(np.float64) - bgw_full[ys, xs].astype(np.float64)
+        delta = delta256 / 256.0
+        sig_n = max(float(sigma), 0.5)
+        peaks, out = [], []
+        while len(peaks) < RECOVER_PEAKS:
+            ok = ex > 0.0
+            for (qx, qy) in peaks:
+                ok &= ~((np.abs(xs - qx) <= RECOVER_R) & (np.abs(ys - qy) <= RECOVER_R))
+            if not ok.any():
+                break
+            i = int(np.argmax(np.where(ok, ex, -np.inf)))
+            best = ex[i]
+            if best <= RECOVER_CONTRAST * delta:
+                break
+            bx, by = int(xs[i]), int(ys[i])
+            peaks.append((bx, by))
+            x0, y0 = max(bx - RECOVER_R, 0), max(by - RECOVER_R, 0)
+            x1, y1 = min(bx + RECOVER_R, self.w - 1), min(by + RECOVER_R, self.h - 1)
+            win = img[y0:y1 + 1, x0:x1 + 1]
+            exw = win.astype(np.float64) - bgw_full[y0:y1 + 1, x0:x1 + 1].astype(np.float64)
+            border = np.ones(win.shape, dtype=bool)
+            border[1:-1, 1:-1] = False
+            ring = float(exw[border].max())
+            contrast = best - ring
+            if contrast <= RECOVER_CONTRAST * delta or contrast / sig_n < float(f32(c["min_snr"])):
+                continue
+            lvl = (bgw_full[y0:y1 + 1, x0:x1 + 1] + f32(ring)).astype(np.float32)
+            core = (win.astype(np.float64) - lvl.astype(np.float64)) > delta
+            area = int(core.sum())
+            if area < c["min_area"]:
+                continue
+            mask = ndimage.binary_dilation(core, structure=np.ones((3, 3), dtype=bool))
+            s = centroid(win, lvl, mask, sigma, c["sat_level"], x0, y0)
+            bad = s is None or f32(s["snr"]) < f32(c["min_snr"]) or s["sig_minor"] <= 0
+            bad = bad or f32(s["sig_major"]) / f32(s["sig_minor"]) > f32(c["max_elong"])
+            if bad or f32(s["sig_major"]) > f32(RECOVER_MAX_SIG):
+                continue
+            s["area"] = area
+            s["flags"] |= ON_CHANGE
+            if x0 == 0 or y0 == 0 or x1 == self.w - 1 or y1 == self.h - 1:
+                s["flags"] |= EDGE
+            out.append(s)
+        return out
+
+    def _stands_out(self, img: np.ndarray, bgw_full: np.ndarray, s: dict, sigma: float) -> bool:
+        """Week 4: the peak against the brightest border pixel of its window (C stands_out())."""
+        cx, cy = math.floor(float(f32(s["x"])) + 0.5), math.floor(float(f32(s["y"])) + 0.5)
+        x0, y0 = max(cx - RECOVER_R, 0), max(cy - RECOVER_R, 0)
+        x1, y1 = min(cx + RECOVER_R, self.w - 1), min(cy + RECOVER_R, self.h - 1)
+        exw = img[y0:y1 + 1, x0:x1 + 1].astype(np.float64) - bgw_full[y0:y1 + 1, x0:x1 + 1].astype(np.float64)
+        yy, xx = np.mgrid[y0:y1 + 1, x0:x1 + 1]
+        ring_px = (np.abs(yy - cy) == RECOVER_R) | (np.abs(xx - cx) == RECOVER_R)  # a cut side has none
+        ring = max(float(exw[ring_px].max()), 0.0) if ring_px.any() else 0.0
+        peak = float(f32(s["peak"]))
+        return ring <= 0.5 * peak or peak - ring >= float(f32(self.cfg["min_snr"])) * max(float(sigma), 0.5)
+
     def frame(self, img: np.ndarray) -> list[dict]:
         c = self.cfg
         if self.bg256 is None:
@@ -141,7 +204,7 @@ class DetectRef:
         first = ndimage.minimum(np.arange(labels.size).reshape(labels.shape), labels, np.arange(1, n + 1))
         order = np.argsort(first) + 1 if n else []
         objects = ndimage.find_objects(labels)
-        spots, rej = [], dict.fromkeys(REJECT_NAMES, 0)
+        spots, rej, recovered = [], dict.fromkeys(REJECT_NAMES, 0), 0
         freeze = np.zeros_like(self.bg256, dtype=bool)
         for lab in order:
             sl = objects[lab - 1]
@@ -153,6 +216,9 @@ class DetectRef:
                 continue
             if area > c["max_area"] or ext_w > c["max_extent"] or ext_h > c["max_extent"]:
                 rej["large"] += 1
+                found = self._recover(img, labels == lab, bgw_full, delta256, sigma)
+                spots += found
+                recovered += len(found)
                 continue
             wy0, wx0 = max(ys.start - 1, 0), max(xs.start - 1, 0)
             wy1, wx1 = min(ys.stop, self.h - 1), min(xs.stop, self.w - 1)
@@ -164,6 +230,9 @@ class DetectRef:
                 continue
             if s["sig_minor"] <= 0 or f32(s["sig_major"]) / f32(s["sig_minor"]) > f32(c["max_elong"]):
                 rej["elongated"] += 1
+                continue
+            if not self._stands_out(img, bgw_full, s, sigma):
+                rej["weak"] += 1
                 continue
             cy0, cy1 = ys.start // CELL - 1, (ys.stop - 1) // CELL + 1
             cx0, cx1 = xs.start // CELL - 1, (xs.stop - 1) // CELL + 1
@@ -177,7 +246,8 @@ class DetectRef:
         step = np.sign(diff) * (np.abs(diff) >> c["bg_shift"])  # truncation toward zero, as C
         snap = (np.abs(diff) > delta256 // 2) & ~freeze  # a scene change: take the new mean at once
         self.bg256 = np.where(freeze, self.bg256, np.where(snap, mean, self.bg256 + step))
-        self.stats = {"sigma": sigma, "blobs": int(n), "spots": len(spots), "rejected": rej,
+        self.stats = {"sigma": sigma, "blobs": int(n) - rej["small"], "spots": len(spots), "rejected": rej,
                       "frozen_cells": int(freeze.sum()), "snapped_cells": int(snap.sum()), "learning": False,
+                      "recovered": recovered,
                       "bg_mean": float(self.bg256.mean() / 256.0)}
         return spots

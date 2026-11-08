@@ -12,7 +12,17 @@
  *  4. Runs of pixels above the threshold per row, joined into blobs across
  *     rows with a union-find (8-connected).
  *  5. Blobs rejected by area, extent, peak SNR and elongation; the rest are
- *     located by at_centroid() on the blob plus a one-pixel border.
+ *     located by at_centroid() on the blob plus a one-pixel border. A spot
+ *     must also stand out from its own surroundings (the brightest pixel on
+ *     a ring 6 px out at most half its peak, or min_snr sigmas below it):
+ *     a scene change about one threshold high breaks up into spot-sized
+ *     fragments in the noise, and those fail (counted as weak).
+ *  6. A blob rejected as too large is usually a scene change (a projected
+ *     shape moving in, a person walking out of the view). A spot that lands
+ *     on it merges with it, so the blob's brightest pixels are taken in turn
+ *     and measured against their own surroundings (the brightest pixel on a
+ *     ring 6 px out): a spot-sized peak at least two detection thresholds
+ *     above that is located against it and flagged AT_SPOT_ON_CHANGE.
  *
  * Memory: the caller provides one block of at_detect_mem_size() bytes at
  * init. Nothing is allocated afterwards, and the run, blob and spot tables
@@ -60,10 +70,11 @@ enum at_reject {
 typedef struct {
 	float sigma;                     /* noise estimate, DN */
 	float bg_mean;                   /* mean background, DN (ambient level) */
-	uint32_t runs, blobs, spots;
+	uint32_t runs, blobs, spots;     /* blobs: of at least min_area (smaller ones take no table place) */
 	uint32_t rejected[AT_REJ_COUNT];
 	uint32_t frozen_cells;           /* background cells not updated (under spots) */
 	uint32_t snapped_cells;          /* cells that changed by more than half the threshold: set at once */
+	uint32_t recovered;              /* spots found inside large blobs (step 6) */
 	uint8_t overflow;                /* AT_OVF_* */
 	bool learning;                   /* the frame seeded the background; nothing detected */
 } at_detect_stats;
@@ -87,7 +98,7 @@ typedef struct {
 	uint16_t *cellsum;   /* cw*ch, this frame's cell sums */
 	uint8_t *freeze;     /* cw*ch, nonzero = under a spot, not updated */
 	at_run *runs;        /* max_runs */
-	uint16_t *blob_of;   /* max_runs: root run -> blob index */
+	uint16_t *blob_of;   /* max_runs: root run -> blob area, then blob index */
 	at_blob *blobs;      /* max_blobs */
 	uint8_t *mask;       /* (max_extent + 2)^2 centroid window mask */
 	float *bgw;          /* (max_extent + 2)^2 centroid window background */

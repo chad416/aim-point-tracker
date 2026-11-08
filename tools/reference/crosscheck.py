@@ -57,10 +57,12 @@ def scene(cam: camsim.Camera, rng: np.random.Generator, k: int) -> tuple[list, l
     # Spots at the image border (the screen itself is 35 px inside the frame).
     for u, v in ((0.3, rng.uniform(50, 750)), (rng.uniform(50, 1230), 799.2)):
         extras.append(lambda sig, u=u, v=v: camsim.render_gaussian(sig, [(u, v)], 1.44 * np.eye(2), 2000.0))
-    if k % 5 == 2:  # a reflection: large and bright
+    if k % 5 == 2:  # a reflection: large and bright, with a spot on top of it (detect step 6)
         x0, y0 = int(rng.integers(100, 1100)), int(rng.integers(100, 600))
         extras.append(lambda sig, x0=x0, y0=y0: sig.__setitem__((slice(y0, y0 + 30), slice(x0, x0 + 40)),
-                                                                 sig[y0:y0 + 30, x0:x0 + 40] + 80.0))
+                                                                 sig[y0:y0 + 30, x0:x0 + 40] + 40.0))
+        u, v = x0 + float(rng.uniform(12, 28)), y0 + float(rng.uniform(10, 20))
+        extras.append(lambda sig, u=u, v=v: camsim.render_gaussian(sig, [(u, v)], 1.44 * np.eye(2), 1300.0))
     if k % 5 == 3:  # a glint: a thin bright line
         x0, y0 = int(rng.integers(100, 1100)), int(rng.integers(100, 600))
         extras.append(lambda sig, x0=x0, y0=y0: sig.__setitem__((slice(y0, y0 + 2), slice(x0, x0 + 18)),
@@ -116,7 +118,7 @@ def main(argv=None) -> int:
 
     errors, times, matched, totals = [], [], [], {"spots": 0, "truth": 0}
     rej_total = dict.fromkeys(AT.REJECT_NAMES, 0)
-    sat_spots = rim_spots = 0
+    sat_spots = rim_spots = recovered = 0
     for k in range(args.frames):
         img, truth = render(cam, rng, k, with_spots=k > 0)
         t = time.perf_counter()
@@ -132,7 +134,7 @@ def main(argv=None) -> int:
         rs = ref.stats
         if st["overflow"]:
             errors.append(f"frame {k}: table overflow {st['overflow']}")
-        for f in ("sigma", "blobs", "frozen_cells", "snapped_cells"):
+        for f in ("sigma", "blobs", "frozen_cells", "snapped_cells", "recovered"):
             if st[f] != rs[f]:
                 errors.append(f"frame {k}: stats {f} C {st[f]} ref {rs[f]}")
         if st["rejected"] != rs["rejected"]:
@@ -143,6 +145,7 @@ def main(argv=None) -> int:
         totals["truth"] += len(truth)
         sat_spots += sum(1 for s in sc if s["flags"] & AT.AT_SPOT_SATURATED)
         rim_spots += sum(1 for s in sc if s["flags"] & AT.AT_SPOT_RIM)
+        recovered += st["recovered"]
         # Ground truth: nearest C spot within 2 px of each screen spot.
         for tr in truth:
             if not sc:
@@ -167,6 +170,7 @@ def main(argv=None) -> int:
         "frames": args.frames, "seed": args.seed, "mismatches": len(errors),
         "spots_compared": totals["spots"], "screen_spots": totals["truth"],
         "screen_spots_found": len(matched), "saturated": sat_spots, "rim_fits": rim_spots,
+        "recovered_in_large_blobs": recovered,
         "rejected": rej_total,
         "truth_rms_px_unsaturated": round(float(np.sqrt(np.mean([m["err_px"] ** 2 for m in detectable]))), 4)
         if detectable else None,

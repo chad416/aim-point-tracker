@@ -15,6 +15,9 @@
 #include <sys/socket.h>
 #include <unistd.h>
 
+/* Static buffer for the sent-frames log, so stdio does not allocate one on first use. */
+static char out_buf[1 << 16];
+
 bool canio_parse_line(const char *line, can_msg *m)
 {
 	long long sec;
@@ -80,7 +83,11 @@ int canio_open_files(canio *c, const char *in_path, const char *out_path)
 		}
 	}
 	c->out = fopen(out_path, "w");
-	return (c->out == NULL) ? -1 : 0;
+	if (c->out == NULL) {
+		return -1;
+	}
+	(void)setvbuf(c->out, out_buf, _IOFBF, sizeof(out_buf));
+	return 0;
 }
 
 int canio_open_socket(canio *c, const char *ifname, const char *log_path)
@@ -109,6 +116,9 @@ int canio_open_socket(canio *c, const char *ifname, const char *log_path)
 	(void)fcntl(c->sock, F_SETFL, O_NONBLOCK);
 	if (log_path != NULL) {
 		c->out = fopen(log_path, "w");
+		if (c->out != NULL) {
+			(void)setvbuf(c->out, out_buf, _IOFBF, sizeof(out_buf));
+		}
 	}
 	return 0;
 }

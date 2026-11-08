@@ -1,13 +1,13 @@
 {
  "aim_pulses": 488,
- "aim_frames": 487,
- "aim_found": 487,
+ "aim_frames": 486,
+ "aim_found": 486,
  "aim_extra": 0,
  "aim_error_mm": {
-  "rms": 0.11303668655206538,
+  "rms": 0.1129747745618601,
   "max": 0.21676048440294443
  },
- "aim_rate_hz": 48.7,
+ "aim_rate_hz": 48.6,
  "records": 12,
  "details_merged": 12,
  "trace_points_per_record": {
@@ -32,7 +32,7 @@
   100.0,
   100.0
  ],
- "status_worst_ms_max": 1.9000000000000001,
+ "status_worst_ms_max": 1.8,
  "status_faults": [
   0
  ],

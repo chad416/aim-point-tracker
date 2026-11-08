@@ -3,3 +3,5 @@
 
 *.png binary
 *.mp4 binary
+*.gif binary
+*.bin binary

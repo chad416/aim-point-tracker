@@ -13,10 +13,11 @@
 enum { EM_AIM, EM_SHOT };
 
 typedef struct {
-	int weapon;  /* index into cfg.weapon */
-	int kind;    /* EM_AIM / EM_SHOT */
-	int shot;    /* index into m->shot for EM_SHOT */
-	bool has_pred;
+	int weapon;     /* index into cfg.weapon */
+	int kind;       /* EM_AIM / EM_SHOT */
+	int shot;       /* index into m->shot for EM_SHOT */
+	bool has_pred;  /* px, py: predicted from the track, or the candidate's position */
+	bool tentative; /* the prediction is only a candidate (no confirmed track yet) */
 	double px, py;
 } emitter;
 
@@ -28,6 +29,8 @@ void at_match_cfg_default(at_match_cfg *cfg)
 	cfg->ambiguity_mm = 20.0;
 	cfg->settle_us = 5000;
 	cfg->drop_wait_us = 30000;
+	cfg->min_init_snr = 40.0F; /* a quarter of the nominal spot: edges of scene changes reach about 20 */
+	cfg->reacquire_misses = 3;
 	at_track_cfg_default(&cfg->track);
 }
 
@@ -171,7 +174,10 @@ static at_mframe *frame_of(at_match *m, int64_t k)
 static double spot_cost(const at_match *m, const emitter *e, const at_mspot *s)
 {
 	if (!e->has_pred) {
-		/* No track yet: any spot will do; prefer the strongest. */
+		/* No track yet: any spot strong enough to be an emitter; prefer the strongest. */
+		if (s->snr < m->cfg.min_init_snr) {
+			return HUGE_VAL;
+		}
 		return (0.5 * m->cfg.gate_mm) - (1e-3 * fmin((double)s->snr, 1000.0));
 	}
 	double d = hypot((double)s->x_mm - e->px, (double)s->y_mm - e->py);
@@ -244,6 +250,62 @@ static void hit_event(at_match *m, const at_mshot *s, int w, const at_mframe *f,
 	m->stats.shots++;
 }
 
+static int64_t pulse_mid(int64_t k)
+{
+	return (k * AT_FRAME_US) + AT_PULSE_START_US + (AT_PULSE_US / 2);
+}
+
+/*
+ * The emitter's expected position: from its confirmed track, else from a
+ * recent candidate (tentative), else none (any spot of at least min_init_snr).
+ */
+static void predict(at_match *m, emitter *e, int64_t k, int64_t t_mid)
+{
+	int w = e->weapon;
+
+	e->tentative = false;
+	e->has_pred = at_track_predict(&m->track[w], &m->cfg.track, t_mid, &e->px, &e->py);
+	if (e->has_pred) {
+		return;
+	}
+	if (m->cand[w] && ((k - m->cand_k[w]) > (2 * m->cfg.n_slots))) {
+		m->cand[w] = false; /* not seen again in time: forget it */
+	}
+	if (m->cand[w]) {
+		e->has_pred = true;
+		e->tentative = true;
+		e->px = m->cand_x[w];
+		e->py = m->cand_y[w];
+	}
+}
+
+/*
+ * A spot assigned to the emitter. Confirmed track: update it. Candidate:
+ * this spot confirms it, the track starts. Neither: the spot becomes the
+ * candidate. Returns true if the weapon now has a track (an AIM is sent).
+ */
+static bool feed_track(at_match *m, const emitter *e, int64_t k, int64_t t_mid, const at_mspot *s)
+{
+	int w = e->weapon;
+
+	if (e->has_pred && !e->tentative) {
+		at_track_update(&m->track[w], &m->cfg.track, t_mid, s->x_mm, s->y_mm);
+		return true;
+	}
+	if (e->tentative) {
+		at_track_update(&m->track[w], &m->cfg.track, pulse_mid(m->cand_k[w]), m->cand_x[w], m->cand_y[w]);
+		at_track_update(&m->track[w], &m->cfg.track, t_mid, s->x_mm, s->y_mm);
+		m->cand[w] = false;
+		m->stats.confirmed++;
+		return true;
+	}
+	m->cand[w] = true;
+	m->cand_x[w] = s->x_mm;
+	m->cand_y[w] = s->y_mm;
+	m->cand_k[w] = k;
+	return false;
+}
+
 /* Settle exposure k. Returns the number of events written (at most MAX_EMITTERS). */
 static int settle(at_match *m, int64_t k, at_mevent *out)
 {
@@ -259,12 +321,12 @@ static int settle(at_match *m, int64_t k, at_mevent *out)
 		for (int i = 0; (i < AT_MATCH_SHOTS) && (ne < MAX_EMITTERS); i++) {
 			if (m->shot[i].active && (m->shot[i].k == k) &&
 			    (m->shot[i].node == m->cfg.weapon[w].node)) {
-				em[ne++] = (emitter){w, EM_SHOT, i, false, 0.0, 0.0};
+				em[ne++] = (emitter){w, EM_SHOT, i, false, false, 0.0, 0.0};
 				shot = true;
 			}
 		}
 		if (!shot && (slot_of(m, k) == m->cfg.weapon[w].slot) && (ne < MAX_EMITTERS)) {
-			em[ne++] = (emitter){w, EM_AIM, NONE, false, 0.0, 0.0};
+			em[ne++] = (emitter){w, EM_AIM, NONE, false, false, 0.0, 0.0};
 		}
 	}
 	if (f == NULL) {
@@ -278,8 +340,7 @@ static int settle(at_match *m, int64_t k, at_mevent *out)
 		return nev;
 	}
 	for (int i = 0; i < ne; i++) {
-		em[i].has_pred = at_track_predict(&m->track[em[i].weapon], &m->cfg.track, t_mid, &em[i].px,
-						  &em[i].py);
+		predict(m, &em[i], k, t_mid);
 	}
 
 	int cur[MAX_EMITTERS], best_a[MAX_EMITTERS];
@@ -311,10 +372,15 @@ static int settle(at_match *m, int64_t k, at_mevent *out)
 		int j = best_a[i];
 		int w = em[i].weapon;
 
+		bool tracked = false;
+
+		if ((j != NONE) && !amb[i]) {
+			tracked = feed_track(m, &em[i], k, t_mid, &f->s[j]);
+		}
 		if (em[i].kind == EM_SHOT) {
 			hit_event(m, &m->shot[em[i].shot], w, f, j, amb[i], &out[nev++]);
 			m->shot[em[i].shot].active = false;
-		} else if ((j != NONE) && !amb[i]) {
+		} else if (tracked) {
 			double x = f->s[j].x_mm;
 			double y = f->s[j].y_mm;
 
@@ -323,16 +389,52 @@ static int settle(at_match *m, int64_t k, at_mevent *out)
 						 .x_mm = (float)x, .y_mm = (float)y,
 						 .quality = quality(f->s[j].snr)};
 		}
-		if ((j != NONE) && !amb[i]) {
-			at_track_update(&m->track[w], &m->cfg.track, t_mid, f->s[j].x_mm, f->s[j].y_mm);
-		}
 		if (j != NONE) {
 			f->taken[j] = 1U;
 		}
 	}
+	int untaken = 0;
+
 	for (int j = 0; j < f->n; j++) {
 		if (f->taken[j] == 0U) {
 			m->stats.stray_spots++;
+			untaken++;
+		}
+	}
+	/*
+	 * A track that keeps missing its weapon's spot while another spot is left: probably the wrong one.
+	 * A candidate that is not seen again is replaced by the strongest spot left.
+	 */
+	for (int i = 0; i < ne; i++) {
+		int w = em[i].weapon;
+
+		if (em[i].tentative && (best_a[i] == NONE)) {
+			/* The candidate was not seen again; the strongest spot left becomes the candidate. */
+			int c = NONE;
+
+			for (int j = 0; j < f->n; j++) {
+				if ((f->taken[j] == 0U) && (f->s[j].snr >= m->cfg.min_init_snr) &&
+				    ((c == NONE) || (f->s[j].snr > f->s[c].snr))) {
+					c = j;
+				}
+			}
+			if (c != NONE) {
+				m->cand_x[w] = f->s[c].x_mm;
+				m->cand_y[w] = f->s[c].y_mm;
+				m->cand_k[w] = k;
+			}
+		}
+		if (em[i].kind != EM_AIM) {
+			continue;
+		}
+		if (best_a[i] != NONE) {
+			m->miss[w] = 0U;
+		} else if ((untaken > 0) && m->track[w].active) {
+			if (++m->miss[w] >= m->cfg.reacquire_misses) {
+				at_track_reset(&m->track[w]);
+				m->miss[w] = 0U;
+				m->stats.reacquired++;
+			}
 		}
 	}
 	f->settled = true;
@@ -349,11 +451,11 @@ static int late_shot(at_match *m, int i, at_mevent *out)
 
 	m->stats.late_shots++;
 	if ((f != NULL) && f->settled) {
-		emitter e = {w, EM_SHOT, i, false, 0.0, 0.0};
-		int64_t t_mid = (s->k * AT_FRAME_US) + AT_PULSE_START_US + (AT_PULSE_US / 2);
+		emitter e = {w, EM_SHOT, i, false, false, 0.0, 0.0};
+		int64_t t_mid = pulse_mid(s->k);
 		double best = m->cfg.gate_mm;
 
-		e.has_pred = at_track_predict(&m->track[w], &m->cfg.track, t_mid, &e.px, &e.py);
+		predict(m, &e, s->k, t_mid);
 		for (int c = 0; c < f->n; c++) {
 			double cost = (f->taken[c] != 0U) ? HUGE_VAL : spot_cost(m, &e, &f->s[c]);
 

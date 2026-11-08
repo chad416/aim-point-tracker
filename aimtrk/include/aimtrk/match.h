@@ -20,6 +20,16 @@
  * with a spot gives an AIM event. Two assignments whose costs are closer than
  * ambiguity_mm are ambiguous: their shots are AMBIGUOUS, their aim is dropped.
  *
+ * A weapon without a track takes only a spot of at least min_init_snr (weak
+ * interference cannot start a track), and that spot is only a candidate:
+ * the track is confirmed when the weapon's next slot frame (or shot) has a
+ * spot inside the gate around it, as a real emitter does in every slot
+ * frame and a stray on a moving edge does not. Until then a shot takes only
+ * a spot consistent with the candidate. A track that misses its weapon's
+ * spot reacquire_misses slot frames in a row while another spot is left
+ * untaken is dropped, so the next slot frame starts it on the strongest spot
+ * (IT09: a track held by a recurring stray while the real spot was elsewhere).
+ *
  * Tracks run on the raw positions; events carry positions after zeroing.
  * Fixed tables, no heap.
  */
@@ -68,6 +78,8 @@ typedef struct {
 	double ambiguity_mm;  /* swapped assignment cheaper than best + this: ambiguous */
 	int64_t settle_us;    /* frame settled this long after its exposure ends */
 	int64_t drop_wait_us; /* a frame not received by then (and no newer one) is dropped */
+	float min_init_snr;   /* a weapon without a track only takes a spot at least this strong */
+	int reacquire_misses; /* slot frames in a row with another spot untaken and none for us: drop the track */
 	at_track_cfg track;
 } at_match_cfg;
 
@@ -106,7 +118,7 @@ typedef struct {
 } at_mshot;
 
 typedef struct {
-	uint32_t frames, dropped, stray_spots, shots, late_shots, ambiguous, unknown_node;
+	uint32_t frames, dropped, stray_spots, shots, late_shots, ambiguous, unknown_node, reacquired, confirmed;
 } at_match_stats;
 
 typedef struct {
@@ -115,6 +127,10 @@ typedef struct {
 	at_zero zero[AT_MAX_WEAPONS];
 	at_mframe ring[AT_MATCH_RING];
 	at_mshot shot[AT_MATCH_SHOTS];
+	uint8_t miss[AT_MAX_WEAPONS]; /* aim slot frames in a row without our spot, another one untaken */
+	bool cand[AT_MAX_WEAPONS];    /* a candidate spot for a new track */
+	float cand_x[AT_MAX_WEAPONS], cand_y[AT_MAX_WEAPONS];
+	int64_t cand_k[AT_MAX_WEAPONS];
 	bool started;
 	int64_t next_settle; /* next exposure to settle */
 	int64_t newest;      /* newest exposure received */

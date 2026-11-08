@@ -21,6 +21,7 @@
 #define AT_SPOT_RIM        0x02U /* position from the rim fit, not the centroid */
 #define AT_SPOT_RIM_FAILED 0x04U /* saturated, rim fit not usable: position is the centroid */
 #define AT_SPOT_EDGE       0x08U /* window cut by the image border */
+#define AT_SPOT_ON_CHANGE  0x10U /* found inside a scene change, located against its level (detect.h) */
 
 typedef struct {
 	float x, y;        /* position, px (image coordinates) */

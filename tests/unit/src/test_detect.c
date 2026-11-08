@@ -370,6 +370,30 @@ ZTEST(detect, test_table_limits)
 	zassert_equal(at_detect_frame(&det, three, W, spots, 8), 2);
 	zassert_equal(st->overflow, AT_OVF_BLOBS);
 
+	/*
+	 * Blobs too small to be a spot take no slot: still two slots, and a spot
+	 * after forty 2-pixel specks in raster order is found (week 4: a scene
+	 * change about one threshold high breaks up into hundreds of them).
+	 */
+	static uint8_t specks[W * H];
+
+	tu_fill(sig, W * H, 20.0F);
+	for (int i = 0; i < 40; i++) {
+		int x = 2 + ((i % 20) * 3);
+		int y = 2 + ((i / 20) * 3);
+
+		sig[(y * W) + x] = 60.0F;
+		sig[(y * W) + x + 1] = 60.0F;
+	}
+	tu_spot(sig, W, H, 40.0, 40.0, 1.2, 1.2, 150.0);
+	tu_quantise(sig, specks, W * H, 0.0, NULL);
+	flat_background(20.0F);
+	zassert_equal(at_detect_frame(&det, specks, W, spots, 8), 1);
+	zassert_equal(st->overflow, 0U);
+	zassert_equal(st->rejected[AT_REJ_SMALL], 40U);
+	zassert_equal(st->blobs, 1U);
+	zassert_within(spots[0].x, 40.0F, 0.05F);
+
 	/* Four run slots: the scan stops adding runs. */
 	cfg.max_blobs = 256;
 	cfg.max_runs = 4;
@@ -402,4 +426,46 @@ ZTEST(detect, test_accuracy_nominal)
 
 	TC_PRINT("nominal spot, 1 DN noise: radial RMS %.4f px\n", rms);
 	zassert_true(rms < 0.05, "%f", rms);
+}
+
+/*
+ * Step 6: a spot on top of a scene change (a projected shape moving in) merges
+ * with it into one large blob; it is found inside, against the blob's level.
+ */
+ZTEST(detect, test_spot_on_scene_change)
+{
+	const at_detect_stats *st = at_detect_get_stats(&det);
+
+	flat_background(20.0F);
+	tu_fill(sig, W * H, 20.0F);
+	for (int y = 8; y < 56; y++) {
+		for (int x = 8; x < 56; x++) {
+			sig[(y * W) + x] += 15.0F; /* the change: 15 DN, over the 8 DN threshold */
+		}
+	}
+	tu_spot(sig, W, H, 30.4, 25.7, 1.2, 1.2, 150.0);
+	tu_spot(sig, W, H, 44.2, 40.6, 1.2, 1.2, 100.0);
+	tu_quantise(sig, img, W * H, 0.0, NULL);
+	zassert_equal(at_detect_frame(&det, img, W, spots, 8), 2);
+	zassert_equal(st->rejected[AT_REJ_LARGE], 1U);
+	zassert_equal(st->recovered, 2U);
+	for (int i = 0; i < 2; i++) {
+		zassert_true((spots[i].flags & AT_SPOT_ON_CHANGE) != 0U);
+	}
+	zassert_within(spots[0].x, 30.4F, 0.05F, "%f", (double)spots[0].x);
+	zassert_within(spots[0].y, 25.7F, 0.05F, "%f", (double)spots[0].y);
+	zassert_within(spots[1].x, 44.2F, 0.05F, "%f", (double)spots[1].x);
+	zassert_within(spots[1].y, 40.6F, 0.05F, "%f", (double)spots[1].y);
+
+	/* The change alone gives no spot; neither does a saturated area (nothing above its level). */
+	flat_background(20.0F);
+	tu_fill(sig, W * H, 20.0F);
+	for (int y = 8; y < 56; y++) {
+		for (int x = 8; x < 56; x++) {
+			sig[(y * W) + x] = ((x < 32) ? 35.0F : 300.0F);
+		}
+	}
+	tu_quantise(sig, img, W * H, 0.0, NULL);
+	zassert_equal(at_detect_frame(&det, img, W, spots, 8), 0);
+	zassert_equal(st->recovered, 0U);
 }

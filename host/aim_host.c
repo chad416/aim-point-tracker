@@ -9,7 +9,7 @@
  *   files   --can-in log --can-out log: everything is replayed on the
  *           tracker's own clock from the timestamps (frames: exposure start
  *           in the header; CAN: reception time), so a run is repeatable.
- *           Frame processing time is measured and added to the clock.
+ *           Frame processing time (thread CPU time) is measured and added to the clock.
  *   socket  --can vcan0: SocketCAN, frames from a pipe, CLOCK_MONOTONIC.
  *
  * Usage: aim_host --frames FILE|- --calib calib.json --weapon NODE:SLOT [...]
@@ -21,6 +21,7 @@
 #include <errno.h>
 #include <getopt.h>
 #include <inttypes.h>
+#include <malloc.h>
 #include <math.h>
 #include <poll.h>
 #include <stdbool.h>
@@ -110,8 +111,9 @@ typedef struct {
 	uint8_t faults;
 	/* totals */
 	uint32_t frames, dropped, no_sync_frames, aims, hits[6], status_sent, can_in_frames;
-	double proc_sum_ms, proc_max_ms, ambient;
+	double proc_sum_ms, proc_max_ms, proc_wall_max_ms, ambient;
 	int64_t p07_max_us;
+	size_t heap_first_frame, heap_end;
 } host;
 
 static int64_t mono_us(void)
@@ -121,6 +123,24 @@ static int64_t mono_us(void)
 	clock_gettime(CLOCK_MONOTONIC, &t);
 	return ((int64_t)t.tv_sec * 1000000) + (t.tv_nsec / 1000);
 }
+
+/* CPU time of this thread: the processing cost of a frame without preemption by other processes (P05). */
+static int64_t cpu_us(void)
+{
+	struct timespec t;
+
+	clock_gettime(CLOCK_THREAD_CPUTIME_ID, &t);
+	return ((int64_t)t.tv_sec * 1000000) + (t.tv_nsec / 1000);
+}
+
+/* Bytes in use on the heap (glibc). Measured after the first frame and at the end: no growth (IT09). */
+static size_t heap_in_use(void)
+{
+	return mallinfo2().uordblks;
+}
+
+/* Output files get static buffers, so stdio does not allocate them on first use. */
+static char aar_buf[1 << 16], frame_log_buf[1 << 16], zero_buf[256];
 
 static int weapon_index(const host *h, uint8_t node)
 {
@@ -298,6 +318,7 @@ static void handle_event(host *h, const at_mevent *e, int64_t lane_now)
 				FILE *f = fopen(h->zero_out, "w");
 
 				if (f != NULL) {
+					(void)setvbuf(f, zero_buf, _IOFBF, sizeof(zero_buf));
 					fprintf(f, "%d %.4f %.4f\n", e->node, z->off_x, z->off_y);
 					fclose(f);
 				}
@@ -445,9 +466,12 @@ static void handle_frame(host *h, int64_t t_ready, bool live)
 	int64_t k = (int64_t)llround((double)(lane_t0 - AT_EXPOSURE_START_US) / AT_FRAME_US);
 	int64_t residual = lane_t0 - ((k * AT_FRAME_US) + AT_EXPOSURE_START_US);
 
-	int64_t t0 = mono_us();
+	int64_t t0 = cpu_us();
+	int64_t w0 = mono_us();
 	int n = at_detect_frame(&h->det, h->fs.pixels, hd->width, h->spots, MAX_SPOTS);
 	at_mspot ms[MAX_SPOTS];
+	uint8_t dflags[MAX_SPOTS]; /* detect's own flags, for the frame log */
+	float dsig[MAX_SPOTS];
 	int nm = 0;
 
 	for (int i = 0; i < n; i++) {
@@ -457,13 +481,16 @@ static void handle_frame(host *h, int64_t t_ready, bool live)
 		if (st == AT_GEOM_FAIL) {
 			continue;
 		}
+		dflags[nm] = h->spots[i].flags;
+		dsig[nm] = h->spots[i].sig_major;
 		ms[nm++] = (at_mspot){.x_mm = (float)x, .y_mm = (float)y, .snr = h->spots[i].snr,
 				      .flags = (uint8_t)(((st == AT_GEOM_OFF_SCREEN) ? AT_MSPOT_OFF_SCREEN : 0U) |
 							 (((h->spots[i].flags & AT_SPOT_RIM_FAILED) != 0U) ? AT_MSPOT_SATURATED
 													  : 0U))};
 	}
-	int64_t proc_us = mono_us() - t0;
+	int64_t proc_us = cpu_us() - t0;
 	double proc_ms = (double)proc_us / 1000.0;
+	double wall_ms = (double)(mono_us() - w0) / 1000.0;
 
 	at_match_frame(&h->match, k, ms, nm);
 	const at_detect_stats *st = at_detect_get_stats(&h->det);
@@ -476,6 +503,10 @@ static void handle_frame(host *h, int64_t t_ready, bool live)
 	h->sec_frames++;
 	h->proc_sum_ms += proc_ms;
 	h->proc_max_ms = fmax(h->proc_max_ms, proc_ms);
+	h->proc_wall_max_ms = fmax(h->proc_wall_max_ms, wall_ms);
+	if (h->frames == 1U) {
+		h->heap_first_frame = heap_in_use();
+	}
 	h->sec_worst_ms = fmax(h->sec_worst_ms, proc_ms);
 	if (llabs(residual) > h->p07_max_us) {
 		h->p07_max_us = llabs(residual);
@@ -483,12 +514,12 @@ static void handle_frame(host *h, int64_t t_ready, bool live)
 	if (h->frame_log != NULL) {
 		fprintf(h->frame_log,
 			"{\"index\":%u,\"k\":%" PRId64 ",\"lane_t0_us\":%" PRId64 ",\"spots\":%d,\"proc_ms\":%.3f,"
-			"\"sigma\":%.3f,\"rejected\":[%u,%u,%u,%u],\"spot_xy\":[",
+			"\"sigma\":%.3f,\"rejected\":[%u,%u,%u,%u],\"overflow\":%u,\"spot_xy\":[",
 			hd->index, k, lane_t0, nm, proc_ms, (double)st->sigma, st->rejected[0], st->rejected[1],
-			st->rejected[2], st->rejected[3]);
+			st->rejected[2], st->rejected[3], st->overflow);
 		for (int i = 0; i < nm; i++) {
-			fprintf(h->frame_log, "%s[%.3f,%.3f,%.1f,%u]", (i > 0) ? "," : "", (double)ms[i].x_mm,
-				(double)ms[i].y_mm, (double)ms[i].snr, ms[i].flags);
+			fprintf(h->frame_log, "%s[%.3f,%.3f,%.1f,%u,%u,%.2f]", (i > 0) ? "," : "", (double)ms[i].x_mm,
+				(double)ms[i].y_mm, (double)ms[i].snr, ms[i].flags, dflags[i], (double)dsig[i]);
 		}
 		fprintf(h->frame_log, "]}\n");
 	}
@@ -620,14 +651,16 @@ static void summary(const host *h)
 
 	printf("{\"frames\":%u,\"camera_dropped\":%u,\"frames_before_sync\":%u,\"can_in\":%u,\"aim\":%u,"
 	       "\"hits\":{\"OK\":%u,\"NO_SPOT\":%u,\"OFF_SCREEN\":%u,\"AMBIGUOUS\":%u,\"SATURATED\":%u,\"DROPPED\":%u},"
-	       "\"status_frames\":%u,\"proc_ms\":{\"mean\":%.3f,\"max\":%.3f},\"frame_time_residual_max_us\":%" PRId64
+	       "\"status_frames\":%u,\"proc_ms\":{\"mean\":%.3f,\"max\":%.3f,\"wall_max\":%.3f},"
+	       "\"heap_bytes\":{\"after_first_frame\":%zu,\"end\":%zu},\"frame_time_residual_max_us\":%" PRId64
 	       ",\"drift_ppm\":%.2f,\"match\":{\"frames\":%u,\"dropped\":%u,\"stray_spots\":%u,\"shots\":%u,"
-	       "\"late_shots\":%u,\"ambiguous\":%u,\"unknown_node\":%u},\"can_bad_lines\":%u}\n",
+	       "\"late_shots\":%u,\"ambiguous\":%u,\"unknown_node\":%u,\"reacquired\":%u,\"confirmed\":%u},\"can_bad_lines\":%u}\n",
 	       h->frames, h->dropped, h->no_sync_frames, h->can_in_frames, h->aims, h->hits[0], h->hits[1], h->hits[2],
 	       h->hits[3], h->hits[4], h->hits[5], h->status_sent,
-	       (h->frames > 0U) ? (h->proc_sum_ms / h->frames) : 0.0, h->proc_max_ms, h->p07_max_us,
+	       (h->frames > 0U) ? (h->proc_sum_ms / h->frames) : 0.0, h->proc_max_ms, h->proc_wall_max_ms,
+	       h->heap_first_frame, h->heap_end, h->p07_max_us,
 	       at_ts_drift_ppm(&h->ts), m->frames, m->dropped, m->stray_spots, m->shots, m->late_shots, m->ambiguous,
-	       m->unknown_node, h->can.bad_lines);
+	       m->unknown_node, m->reacquired, m->confirmed, h->can.bad_lines);
 }
 
 static void usage(void)
@@ -747,12 +780,19 @@ int main(int argc, char **argv)
 	}
 	if (h.aar_path != NULL) {
 		h.aar = fopen(h.aar_path, "w");
+		if (h.aar != NULL) {
+			(void)setvbuf(h.aar, aar_buf, _IOFBF, sizeof(aar_buf));
+		}
 	}
 	if (h.frame_log_path != NULL) {
 		h.frame_log = fopen(h.frame_log_path, "w");
+		if (h.frame_log != NULL) {
+			(void)setvbuf(h.frame_log, frame_log_buf, _IOFBF, sizeof(frame_log_buf));
+		}
 	}
 	rc = (h.can_if != NULL) ? run_socket(&h) : run_files(&h);
 	flush(&h);
+	h.heap_end = heap_in_use();
 	summary(&h);
 	canio_close(&h.can);
 	frames_close(&h.fs);
