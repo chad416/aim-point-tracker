@@ -34,7 +34,7 @@ The simulation meets P01 by a factor of 50. That is not a claim about a real lan
 - **The camera is simulated.** The sensor and lens values are assumptions for a sensor of this class, not datasheet values; the screen is flat; the projector-leak levels (4–30 DN) are assumptions. The fast renderer repeats its background noise every 48 frames.
 - **P05 is shown at the 99.9th percentile, not as a worst case, and not under load.** Timing comes from WSL2 and CI runners, both virtual machines. `aim_host` measures each frame's thread CPU time and wall time; on WSL2 the CPU-time clock reads about 8 % more than the wall clock on the same frames, and the slowest frames by either clock are ordinary frames slowed by the host (12–14 ms). The 99.9th percentile was 2.4 ms on a quiet PC, 2.9 ms in the recorded run, and 3.4–3.6 ms with other work running on the PC, over the limit. A worst case needs a target board; nothing locks memory or sets real-time scheduling unless `--rt` is given.
 - **The weapon firmware does not hold its pulses within ±100 µs.** IT10 measured −49 to +140 µs with v0.6.2 (inside the ±250 µs the exposure allows, so no light was lost). In IT10 only the weapon is real firmware; where it aims is scripted and the camera is the simulator.
-- **SocketCAN is tested on vcan only** (IT11), not on a CAN controller with arbitration and bus errors. IT11 is skipped where no vcan interface is up; whether GitHub's hosted runners provide the vcan module is not confirmed.
+- **SocketCAN is tested on vcan only** (IT11), not on a CAN controller with arbitration and bus errors. IT11 runs in CI (the hosted Ubuntu runner provides the vcan module) and is skipped where no vcan interface is up.
 
 ## Quick start
 
