@@ -222,3 +222,32 @@ ZTEST(calib, test_no_holdout_and_iteration_limit)
 	zassert_equal(at_calib_run(dots, n, grid, NG, &nominal, &cfg, TS_SCREEN_W, TS_SCREEN_H, &g, &rep),
 		      AT_CAL_NO_CONVERGE);
 }
+
+/* A dot position that is not a number: refused, never a NaN geometry (fitted or held-out point). */
+ZTEST(calib, test_nan_dot_refused)
+{
+	at_calib_cfg cfg;
+	at_calib_report rep;
+	at_geom g, before;
+	int match[NG];
+	int n = make_dots(0.02, 7U);
+
+	at_calib_cfg_default(&cfg);
+	zassert_equal(at_calib_order(dots, n, grid, NG, &nominal, cfg.gate_px, match), NG);
+	memset(&before, 0x3C, sizeof(before));
+
+	/* Grid point 22 is fitted: the cost is NaN, no step lowers it, and the gradient is not zero. */
+	dots[2 * match[22]] = NAN;
+	g = before;
+	zassert_equal(at_calib_fit(dots, grid, match, NG, &nominal, &cfg, TS_SCREEN_W, TS_SCREEN_H, &g, &rep),
+		      AT_CAL_NO_CONVERGE);
+	zassert_mem_equal(&g, &before, sizeof(g));
+
+	/* Grid point 24 is held out: the fit converges, the held-out residual is NaN. */
+	n = make_dots(0.02, 7U);
+	dots[2 * match[24]] = NAN;
+	g = before;
+	zassert_equal(at_calib_fit(dots, grid, match, NG, &nominal, &cfg, TS_SCREEN_W, TS_SCREEN_H, &g, &rep),
+		      AT_CAL_RESIDUAL);
+	zassert_mem_equal(&g, &before, sizeof(g));
+}

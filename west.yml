@@ -1,7 +1,8 @@
 # West manifest (T2 topology): this repository is the manifest repository.
-# Same Zephyr revision as S1 and S2. S3 uses Zephyr only for the ztest unit
-# tests of the aimtrk library on native_sim; the module list is kept the same
-# so the three projects can share one west workspace.
+# Same Zephyr revision as trainer-weapon-firmware-twin and
+# motion-platform-controller. This repository uses Zephyr only for the ztest
+# unit tests of the aimtrk library on native_sim; the module list is kept the
+# same so the three projects can share one west workspace.
 manifest:
   self:
     path: aimtrk-fw

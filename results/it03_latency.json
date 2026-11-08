@@ -18,9 +18,9 @@
  },
  "frames": 1000,
  "proc_ms": {
-  "mean": 1.047,
-  "max": 3.511,
-  "wall_max": 3.221
+  "mean": 1.008,
+  "max": 1.88,
+  "wall_max": 1.75
  },
  "drift_ppm_estimated": -29.43,
  "drift_ppm_true": -39.99840006399744,

@@ -9,6 +9,9 @@
 
 #define MAX_EMITTERS (AT_MAX_WEAPONS + 4) /* aim pulses plus a few shot pulses */
 #define NONE         (-1)
+#define SEVERAL      (-2)   /* emitter.only: more than one spot could be the untracked shot's */
+#define RECUR_MM     10.0   /* a spot this close to one in the frames before is not a new flash */
+#define RECUR_FRAMES 2
 
 enum { EM_AIM, EM_SHOT };
 
@@ -19,6 +22,7 @@ typedef struct {
 	bool has_pred;  /* px, py: predicted from the track, or the candidate's position */
 	bool tentative; /* the prediction is only a candidate (no confirmed track yet) */
 	double px, py;
+	int only;       /* EM_SHOT without a prediction: the one spot it may take, NONE or SEVERAL */
 } emitter;
 
 void at_match_cfg_default(at_match_cfg *cfg)
@@ -161,7 +165,8 @@ int at_match_shot(at_match *m, uint8_t node, uint16_t shot_no, int64_t t_break_u
 			return 0;
 		}
 	}
-	return -1; /* table full: the shot is lost (counted by the caller) */
+	m->stats.shots_lost++; /* table full: no HIT will be sent for this shot */
+	return -1;
 }
 
 static at_mframe *frame_of(at_match *m, int64_t k)
@@ -188,7 +193,58 @@ static double spot_cost(const at_match *m, const emitter *e, const at_mspot *s)
 /* Cost of emitter e taking spot j (NONE: no spot). */
 static double cost_of(const at_match *m, const emitter *e, const at_mframe *f, int j)
 {
-	return (j == NONE) ? m->cfg.gate_mm : spot_cost(m, e, &f->s[j]);
+	if (j == NONE) {
+		return m->cfg.gate_mm;
+	}
+	if (!e->has_pred && (e->kind == EM_SHOT) && (j != e->only)) {
+		return HUGE_VAL; /* an untracked shot takes only its one unexplained spot */
+	}
+	return spot_cost(m, e, &f->s[j]);
+}
+
+/* A spot at about the same place was already in one of the RECUR_FRAMES frames before k. */
+static bool recurring(at_match *m, int64_t k, const at_mspot *s)
+{
+	for (int64_t b = 1; b <= RECUR_FRAMES; b++) {
+		const at_mframe *p = frame_of(m, k - b);
+
+		for (int j = 0; (p != NULL) && (j < p->n); j++) {
+			if (hypot((double)(p->s[j].x_mm - s->x_mm), (double)(p->s[j].y_mm - s->y_mm)) <= RECUR_MM) {
+				return true;
+			}
+		}
+	}
+	return false;
+}
+
+/*
+ * The spot a shot of a weapon with no track and no candidate may take (see
+ * match.h): the only spot of frame k that is strong enough, not taken, not
+ * within the gate of another emitter's prediction (em, ne; self is the
+ * shot's own index) and not recurring. NONE if there is none, SEVERAL if
+ * there are more.
+ */
+static int untracked_spot(at_match *m, const emitter *em, int ne, int self, const at_mframe *f, int64_t k)
+{
+	int found = NONE;
+
+	for (int j = 0; j < f->n; j++) {
+		const at_mspot *s = &f->s[j];
+		bool explained = (f->taken[j] != 0U) || (s->snr < m->cfg.min_init_snr);
+
+		for (int i = 0; (i < ne) && !explained; i++) {
+			explained = (i != self) && em[i].has_pred &&
+				    (hypot((double)s->x_mm - em[i].px, (double)s->y_mm - em[i].py) <= m->cfg.gate_mm);
+		}
+		if (explained || recurring(m, k, s)) {
+			continue;
+		}
+		if (found != NONE) {
+			return SEVERAL;
+		}
+		found = j;
+	}
+	return found;
 }
 
 /* Exhaustive assignment: at most MAX_EMITTERS emitters, AT_MATCH_MAX_SPOTS spots. */
@@ -250,7 +306,7 @@ static void hit_event(at_match *m, const at_mshot *s, int w, const at_mframe *f,
 	m->stats.shots++;
 }
 
-static int64_t pulse_mid(int64_t k)
+int64_t at_match_pulse_mid(int64_t k)
 {
 	return (k * AT_FRAME_US) + AT_PULSE_START_US + (AT_PULSE_US / 2);
 }
@@ -293,7 +349,8 @@ static bool feed_track(at_match *m, const emitter *e, int64_t k, int64_t t_mid, 
 		return true;
 	}
 	if (e->tentative) {
-		at_track_update(&m->track[w], &m->cfg.track, pulse_mid(m->cand_k[w]), m->cand_x[w], m->cand_y[w]);
+		at_track_update(&m->track[w], &m->cfg.track, at_match_pulse_mid(m->cand_k[w]), m->cand_x[w],
+				m->cand_y[w]);
 		at_track_update(&m->track[w], &m->cfg.track, t_mid, s->x_mm, s->y_mm);
 		m->cand[w] = false;
 		m->stats.confirmed++;
@@ -313,7 +370,7 @@ static int settle(at_match *m, int64_t k, at_mevent *out)
 	emitter em[MAX_EMITTERS];
 	int ne = 0;
 	int nev = 0;
-	int64_t t_mid = (k * AT_FRAME_US) + AT_PULSE_START_US + (AT_PULSE_US / 2);
+	int64_t t_mid = at_match_pulse_mid(k);
 
 	for (int w = 0; w < m->cfg.n_weapons; w++) {
 		bool shot = false;
@@ -321,12 +378,12 @@ static int settle(at_match *m, int64_t k, at_mevent *out)
 		for (int i = 0; (i < AT_MATCH_SHOTS) && (ne < MAX_EMITTERS); i++) {
 			if (m->shot[i].active && (m->shot[i].k == k) &&
 			    (m->shot[i].node == m->cfg.weapon[w].node)) {
-				em[ne++] = (emitter){w, EM_SHOT, i, false, false, 0.0, 0.0};
+				em[ne++] = (emitter){.weapon = w, .kind = EM_SHOT, .shot = i, .only = NONE};
 				shot = true;
 			}
 		}
 		if (!shot && (slot_of(m, k) == m->cfg.weapon[w].slot) && (ne < MAX_EMITTERS)) {
-			em[ne++] = (emitter){w, EM_AIM, NONE, false, false, 0.0, 0.0};
+			em[ne++] = (emitter){.weapon = w, .kind = EM_AIM, .shot = NONE, .only = NONE};
 		}
 	}
 	if (f == NULL) {
@@ -341,6 +398,12 @@ static int settle(at_match *m, int64_t k, at_mevent *out)
 	}
 	for (int i = 0; i < ne; i++) {
 		predict(m, &em[i], k, t_mid);
+	}
+	for (int i = 0; i < ne; i++) {
+		if ((em[i].kind == EM_SHOT) && !em[i].has_pred) {
+			m->stats.untracked_shots++;
+			em[i].only = untracked_spot(m, em, ne, i, f, k);
+		}
 	}
 
 	int cur[MAX_EMITTERS], best_a[MAX_EMITTERS];
@@ -365,6 +428,9 @@ static int settle(at_match *m, int64_t k, at_mevent *out)
 				amb[a] = true;
 				amb[b] = true;
 			}
+		}
+		if (em[a].only == SEVERAL) {
+			amb[a] = true; /* an untracked shot with several unexplained spots: cannot tell which */
 		}
 	}
 
@@ -448,16 +514,22 @@ static int late_shot(at_match *m, int i, at_mevent *out)
 	int w = weapon_index(m, s->node);
 	at_mframe *f = frame_of(m, s->k);
 	int j = NONE;
+	bool ambiguous = false;
 
 	m->stats.late_shots++;
 	if ((f != NULL) && f->settled) {
-		emitter e = {w, EM_SHOT, i, false, false, 0.0, 0.0};
-		int64_t t_mid = pulse_mid(s->k);
+		emitter e = {.weapon = w, .kind = EM_SHOT, .shot = i, .only = NONE};
+		int64_t t_mid = at_match_pulse_mid(s->k);
 		double best = m->cfg.gate_mm;
 
 		predict(m, &e, s->k, t_mid);
+		if (!e.has_pred) {
+			m->stats.untracked_shots++;
+			e.only = untracked_spot(m, NULL, 0, NONE, f, s->k);
+			ambiguous = (e.only == SEVERAL);
+		}
 		for (int c = 0; c < f->n; c++) {
-			double cost = (f->taken[c] != 0U) ? HUGE_VAL : spot_cost(m, &e, &f->s[c]);
+			double cost = (f->taken[c] != 0U) ? HUGE_VAL : cost_of(m, &e, f, c);
 
 			if (cost < best) {
 				best = cost;
@@ -471,7 +543,7 @@ static int late_shot(at_match *m, int i, at_mevent *out)
 	} else {
 		f = NULL;
 	}
-	hit_event(m, s, w, f, j, false, out);
+	hit_event(m, s, w, f, j, ambiguous, out);
 	s->active = false;
 	return 1;
 }

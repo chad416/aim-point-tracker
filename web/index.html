@@ -1,0 +1,72 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>aim-point-tracker · live demo</title>
+<link rel="stylesheet" href="style.css">
+</head>
+<body>
+<header>
+  <h1>aim-point-tracker <span class="sub">live demo</span></h1>
+  <p>The tracker's spot detector (<code>aimtrk/</code>, plain C, no heap) compiled to WebAssembly and
+  running on every frame of a simulated 1280 × 800 infrared camera in your browser: background model,
+  noise estimate, threshold, blob table, rejection rules and the sub-pixel centroid. Move the mouse
+  over the camera image to aim the emitter; click to fire a shot. The same C runs in the tracker
+  service and its unit tests. <a href="https://github.com/chad416/aim-point-tracker">Source</a></p>
+</header>
+
+<main>
+  <section class="cam">
+    <canvas id="cam" width="1280" height="800" aria-label="Simulated IR camera frame with detections"></canvas>
+    <div class="legend">
+      <span><i style="border-color: var(--muted)"></i>true emitter position (simulator)</span>
+      <span><i style="border-color: var(--accent)"></i>spot found by the C detector</span>
+      <span>Display gamma-stretched: the room is about 16 DN of 255</span>
+    </div>
+  </section>
+
+  <section class="panel">
+    <h2>Aim spot (magnified 16 × 16 px)</h2>
+    <canvas id="mag" width="240" height="240" aria-label="Magnified pixels around the aim spot"></canvas>
+    <table class="readout">
+      <tr><th>Found</th><td id="found"></td></tr>
+      <tr><th>Position error</th><td id="err"></td></tr>
+      <tr><th>RMS error, last 200</th><td id="rms"></td></tr>
+      <tr><th>Peak SNR</th><td id="snr"></td></tr>
+      <tr><th>Detector time / frame</th><td id="ms"></td></tr>
+    </table>
+    <div id="shots" class="shots"></div>
+
+    <h2>Interference</h2>
+    <label class="slider">Projector leak <output id="leak_v"></output>
+      <input id="leak" type="range" min="0" max="40" step="2" value="8"></label>
+    <label class="slider">Emitter brightness <output id="bright_v"></output>
+      <input id="bright" type="range" min="100" max="6000" step="100" value="1500"></label>
+    <label class="check"><input type="checkbox" id="window"> Sunlit window (saturated area)</label>
+    <label class="check"><input type="checkbox" id="glints"> Glints off a rail</label>
+    <label class="check"><input type="checkbox" id="person"> Person walking through the view</label>
+
+    <h2>Last frame (detector statistics)</h2>
+    <table class="readout">
+      <tr><th>Noise σ / background</th><td id="sigma"></td></tr>
+      <tr><th>Runs / blobs / spots</th><td id="blobs"></td></tr>
+      <tr><th>Rejected: small (hot pixels)</th><td id="rej_small"></td></tr>
+      <tr><th>Rejected: large</th><td id="rej_large"></td></tr>
+      <tr><th>Rejected: weak</th><td id="rej_weak"></td></tr>
+      <tr><th>Rejected: elongated</th><td id="rej_elong"></td></tr>
+      <tr><th>Background cells snapped</th><td id="snapped"></td></tr>
+      <tr><th>False spots, this session</th><td id="strays"></td></tr>
+    </table>
+  </section>
+</main>
+
+<footer>
+  WebAssembly module built from <code>aimtrk/</code> and <code>web/aimtrk_web.c</code> by
+  <code>scripts/build-web.sh</code> (clang, wasm32, no Emscripten). The frames come from a JavaScript
+  cut-down of the repository's camera simulator (<code>sim/camsim.py</code>): same sensor values, flat
+  screen, no lens. The emitter flashes in every other frame, as a weapon in one of two time slots.
+</footer>
+<script type="module" src="app.js"></script>
+</body>
+</html>

@@ -1,8 +1,8 @@
 # IT10 co-simulation, Renode side (IronPython 2.7, run inside Renode 1.17).
 #
-# Loaded after S1's sim/lane.resc (two trainer_fw machines, node 1 and node 2,
+# Loaded after the weapon firmware's sim/lane.resc (two trainer_fw machines, node 1 and node 2,
 # on one CAN hub). Drives the lane the way the lane controller and two
-# shooters would, and records what S1's firmware does:
+# shooters would, and records what the firmware does:
 #
 #   - SYNC every 10 ms (ISO-TP single frame, lane time = virtual time + LANE0_US)
 #   - camera mode on both weapons: STROBE_SLOT (key 14) = 0 / 1, STROBE_SLOTS (key 13) = 2
@@ -19,12 +19,13 @@
 #   L <lane0_us>                   lane time = virtual time + lane0
 import clr
 from System import Array, Byte, Environment
+from System.IO import Path
 from Antmicro.Renode.Core import EmulationManager
 from Antmicro.Renode.Peripherals import IPeripheral
 from Antmicro.Renode.Time import TimeInterval
 import Antmicro.Renode.Core.CAN as CC
 
-OUT = Environment.GetEnvironmentVariable("COSIM_OUT") or "/root/cosim_events.txt"
+OUT = Environment.GetEnvironmentVariable("COSIM_OUT") or Path.Combine(Path.GetTempPath(), "cosim_events.txt")
 LANE0_US = 5000000
 STEP_US = 10000          # SYNC period, and the driver's time step
 END_US = 3400000

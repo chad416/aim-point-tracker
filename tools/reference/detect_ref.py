@@ -125,7 +125,7 @@ class DetectRef:
 
     def _recover(self, img: np.ndarray, blob: np.ndarray, bgw_full: np.ndarray, delta256: int,
                  sigma: float) -> list[dict]:
-        """Step 6 (SPEC 6.1, week 4): spots inside a blob rejected as too large, each measured against
+        """Step 6 (SPEC 6.1, M4): spots inside a blob rejected as too large, each measured against
         the brightest pixel on the border of its window."""
         c = self.cfg
         ys, xs = np.nonzero(blob)  # raster order, as the C run scan
@@ -174,7 +174,7 @@ class DetectRef:
         return out
 
     def _stands_out(self, img: np.ndarray, bgw_full: np.ndarray, s: dict, sigma: float) -> bool:
-        """Week 4: the peak against the brightest border pixel of its window (C stands_out())."""
+        """M4: the peak against the brightest border pixel of its window (C stands_out())."""
         cx, cy = math.floor(float(f32(s["x"])) + 0.5), math.floor(float(f32(s["y"])) + 0.5)
         x0, y0 = max(cx - RECOVER_R, 0), max(cy - RECOVER_R, 0)
         x1, y1 = min(cx + RECOVER_R, self.w - 1), min(cy + RECOVER_R, self.h - 1)

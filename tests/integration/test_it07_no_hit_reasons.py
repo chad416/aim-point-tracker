@@ -13,7 +13,11 @@ One weapon, three shots per situation:
 """
 from __future__ import annotations
 
+import json
 import math
+import subprocess
+
+import numpy as np
 
 import lane as LN
 import scenario as SC
@@ -75,3 +79,24 @@ def test_no_hit_reasons(lib, cam, calibration, tmp_path):
         assert all(r["error_mm"] <= 1.0 for r in got[name]), (name, got[name])
     assert dropped_status == 3
     assert any(f & 0x04 for f in faults), "FRAMES_DROPPED fault bit"
+
+
+def test_frame_of_another_size_skipped(calibration, tmp_path):
+    """A frame whose size differs from the first one is skipped and counted (its exposure counts as
+    dropped), not read with the first frame's stride."""
+    k0 = 100_000  # exposure numbers; the tracker's clock is lane time here
+    frames, can_in = tmp_path / "frames.bin", tmp_path / "can_in.log"
+    with open(frames, "wb") as f:
+        for i in range(6):
+            img = np.full((400 if i == 3 else 800, 1280), 20, np.uint8)
+            LN.camsim.write_frame(f, img, i, t_local_us=(k0 + i) * SC.FRAME_US + SC.EXPOSURE_START_US)
+    sync = [(k0 - 40 + j) * SC.SYNC_PERIOD_US for j in range(50)]  # SYNC (ID 0x080): 04 + lane time, LE
+    can_in.write_text("".join(f"({t // 10**6}.{t % 10**6:06d}) can0 080#04{t.to_bytes(4, 'little').hex()}\n"
+                              for t in sync))
+    r = subprocess.run([str(LN.build_host()), "--frames", str(frames), "--calib", str(calibration["path"]),
+                        "--weapon", "1:0", "--can-in", str(can_in), "--can-out", str(tmp_path / "can_out.log")],
+                       capture_output=True, text=True, check=True)
+    summ = json.loads(r.stdout.strip().splitlines()[-1])
+    assert summ["frames_bad_size"] == 1 and summ["frames"] == 5, summ
+    assert summ["camera_dropped"] == 0 and summ["match"]["dropped"] == 1, summ
+    assert "1280x400, not 1280x800: skipped" in r.stderr

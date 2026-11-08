@@ -10,13 +10,19 @@
  *           tracker's own clock from the timestamps (frames: exposure start
  *           in the header; CAN: reception time), so a run is repeatable.
  *           Frame processing time (thread CPU time) is measured and added to the clock.
- *   socket  --can vcan0: SocketCAN, frames from a pipe, CLOCK_MONOTONIC.
+ *   socket  --can vcan0: SocketCAN, frames from a pipe, CLOCK_MONOTONIC. CAN
+ *           frames carry their kernel reception time (canio.h), so SYNC is
+ *           stamped when it arrived, not when the loop got to it.
  *
  * Usage: aim_host --frames FILE|- --calib calib.json --weapon NODE:SLOT [...]
  *                 (--can-in IN --can-out OUT | --can IFNAME [--can-log OUT])
  *                 [--slots N] [--aar aar.jsonl] [--frame-log frames.jsonl]
  *                 [--readout-us 2500] [--zero-in zero.txt]
- *                 [--zero NODE:X:Y:N --zero-out zero.txt]
+ *                 [--zero NODE:X:Y:N --zero-out zero.txt] [--rt]
+ *
+ *   --rt    mlockall() and SCHED_FIFO for the live loop (needs the rights;
+ *           a warning, not an error, without them). Off by default: the
+ *           measurements in results/ were taken without it.
  */
 #include <errno.h>
 #include <getopt.h>
@@ -24,11 +30,13 @@
 #include <malloc.h>
 #include <math.h>
 #include <poll.h>
+#include <sched.h>
 #include <stdbool.h>
 #include <stdint.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <sys/mman.h>
 #include <time.h>
 #include <unistd.h>
 
@@ -51,6 +59,9 @@
 #define AAR_AFTER    500000  /* ... to 0.5 s after (SPEC F12) */
 #define SLOW_MS      3.0     /* P05 */
 #define CAL_OLD_H    24
+#define N_RESULTS    6    /* enum at_hit_result: OK .. DROPPED */
+#define ZERO_MAX_SPREAD_MM 20.0 /* a zeroing group wider than this (RMS radius) is refused: not a steady hold */
+#define RT_PRIORITY  50   /* --rt: SCHED_FIFO priority */
 
 typedef struct {
 	int64_t t;
@@ -80,6 +91,7 @@ typedef struct {
 	/* options */
 	const char *frames_path, *calib_path, *can_in, *can_out, *can_if, *can_log, *aar_path, *frame_log_path;
 	const char *zero_in, *zero_out;
+	bool rt;
 	int64_t readout_us;
 	int zero_node, zero_n;
 	double zero_tx, zero_ty;
@@ -110,7 +122,9 @@ typedef struct {
 	double sec_worst_ms;
 	uint8_t faults;
 	/* totals */
-	uint32_t frames, dropped, no_sync_frames, aims, hits[6], status_sent, can_in_frames;
+	uint32_t frames, dropped, no_sync_frames, aims, hits[N_RESULTS], hits_invalid, status_sent, can_in_frames;
+	uint32_t bad_size_frames; /* frames whose size differs from the first one: skipped */
+	uint32_t lost_at_status;  /* CAN frames not sent plus shots not taken, at the last TRK_STATUS */
 	double proc_sum_ms, proc_max_ms, proc_wall_max_ms, ambient;
 	int64_t p07_max_us;
 	size_t heap_first_frame, heap_end;
@@ -124,7 +138,15 @@ static int64_t mono_us(void)
 	return ((int64_t)t.tv_sec * 1000000) + (t.tv_nsec / 1000);
 }
 
-/* CPU time of this thread: the processing cost of a frame without preemption by other processes (P05). */
+/*
+ * CPU time of this thread (P05). It leaves out the time the guest kernel ran
+ * other threads, but not the time a hypervisor takes the virtual CPU away
+ * while this thread is running (steal time on WSL2 and CI runners): that
+ * still counts. The wall time of each frame is measured as well. On WSL2
+ * this clock reads about 8 % more than CLOCK_MONOTONIC over the same frames
+ * (IT09), so it is not even a lower bound of the wall time there; both are
+ * reported, and neither gives a worst case on a virtual machine.
+ */
 static int64_t cpu_us(void)
 {
 	struct timespec t;
@@ -157,14 +179,15 @@ static void send(host *h, uint16_t id, const uint8_t *d, int len)
 	can_msg m = {.t_local_us = h->clock, .id = id, .len = (uint8_t)len};
 
 	memcpy(m.data, d, (size_t)len);
+	/* A refused frame is counted in h->can.tx_dropped and flagged in the next TRK_STATUS. */
 	(void)canio_send(&h->can, &m);
 }
 
 static const char *result_name(uint8_t r)
 {
-	static const char *const n[] = {"OK", "NO_SPOT", "OFF_SCREEN", "AMBIGUOUS", "SATURATED", "DROPPED"};
+	static const char *const n[N_RESULTS] = {"OK", "NO_SPOT", "OFF_SCREEN", "AMBIGUOUS", "SATURATED", "DROPPED"};
 
-	return (r < 6U) ? n[r] : "?";
+	return (r < N_RESULTS) ? n[r] : "?";
 }
 
 /* ---- after-action records (SPEC F12) ---------------------------------------------- */
@@ -283,8 +306,7 @@ static void handle_event(host *h, const at_mevent *e, int64_t lane_now)
 		if (w >= 0) {
 			aim_hist *hs = &h->hist[w];
 
-			hs->p[hs->head] = (aim_pt){(e->k * AT_FRAME_US) + AT_PULSE_START_US + (AT_PULSE_US / 2), e->x_mm,
-						   e->y_mm};
+			hs->p[hs->head] = (aim_pt){at_match_pulse_mid(e->k), e->x_mm, e->y_mm};
 			hs->head = (hs->head + 1) % AIM_HIST;
 			hs->n = (hs->n < AIM_HIST) ? (hs->n + 1) : AIM_HIST;
 		}
@@ -296,7 +318,11 @@ static void handle_event(host *h, const at_mevent *e, int64_t lane_now)
 			.quality = e->quality, .latency_ms = latency};
 
 	send(h, AT_CAN_ID(AT_FN_HIT, e->node), d, at_proto_hit(&m, d));
-	h->hits[(e->result < 6U) ? e->result : 0U]++;
+	if (e->result < N_RESULTS) {
+		h->hits[e->result]++;
+	} else {
+		h->hits_invalid++; /* not an at_hit_result: never expected */
+	}
 	aar_add(h, e, latency);
 
 	/* Zeroing session: OK hits of the zeroing weapon, in raw coordinates. */
@@ -310,7 +336,7 @@ static void handle_event(host *h, const at_mevent *e, int64_t lane_now)
 		}
 		at_zero_add(z, x, y, h->zero_tx, h->zero_ty);
 		if (++h->zero_got == h->zero_n) {
-			int rc = at_zero_finish(z, h->zero_n, 20.0);
+			int rc = at_zero_finish(z, h->zero_n, ZERO_MAX_SPREAD_MM);
 
 			fprintf(stderr, "zeroing node %d: %s, offset (%.2f, %.2f) mm, group %.2f mm\n", e->node,
 				(rc == AT_ZERO_OK) ? "ok" : "refused", z->off_x, z->off_y, z->spread_mm);
@@ -385,6 +411,12 @@ static void send_status(host *h)
 	if (!h->ts.synced) {
 		s.faults |= AT_FAULT_NO_SYNC;
 	}
+	uint32_t lost = h->can.tx_dropped + h->match.stats.shots_lost;
+
+	if (lost != h->lost_at_status) {
+		s.faults |= AT_FAULT_CAN_LOSS; /* since the last TRK_STATUS */
+		h->lost_at_status = lost;
+	}
 	send(h, AT_CAN_ID(AT_FN_TRK_STATUS, AT_TRACKER_NODE), d, at_proto_status(&s, d));
 	h->status_sent++;
 	h->sec_frames = 0U;
@@ -415,7 +447,14 @@ static void handle_can(host *h, const can_msg *c)
 		at_shot_event s;
 
 		if (at_proto_shot_event(c->data, c->len, &s) && h->ts.synced) {
-			(void)at_match_shot(&h->match, node, s.shot_no, at_ts_unwrap_near(s.t_us, lane));
+			uint32_t lost = h->match.stats.shots_lost;
+
+			/* Refused: an unknown node (counted in match.unknown_node), or the shot table is full. */
+			if ((at_match_shot(&h->match, node, s.shot_no, at_ts_unwrap_near(s.t_us, lane)) != 0) &&
+			    (h->match.stats.shots_lost != lost)) {
+				fprintf(stderr, "aim_host: shot %u of node %u lost: pending-shot table full\n", s.shot_no,
+					node);
+			}
 		}
 	} else if (fn == AT_FN_SHOT_DETAIL) {
 		at_shot_detail s;
@@ -457,6 +496,14 @@ static void handle_frame(host *h, int64_t t_ready, bool live)
 	if (!h->det_ready && (init_detect(h, hd->width, hd->height) != 0)) {
 		fprintf(stderr, "aim_host: bad frame size %ux%u\n", hd->width, hd->height);
 		exit(2);
+	}
+	if ((hd->width != h->det.cfg.width) || (hd->height != h->det.cfg.height)) {
+		/* The detector is sized by the first frame. Another size is skipped: its exposure counts as dropped. */
+		if (h->bad_size_frames++ == 0U) {
+			fprintf(stderr, "aim_host: frame %u is %ux%u, not %ux%u: skipped\n", hd->index, hd->width,
+				hd->height, h->det.cfg.width, h->det.cfg.height);
+		}
+		return;
 	}
 	if (!h->ts.synced) {
 		h->no_sync_frames++;
@@ -513,10 +560,11 @@ static void handle_frame(host *h, int64_t t_ready, bool live)
 	}
 	if (h->frame_log != NULL) {
 		fprintf(h->frame_log,
-			"{\"index\":%u,\"k\":%" PRId64 ",\"lane_t0_us\":%" PRId64 ",\"spots\":%d,\"proc_ms\":%.3f,"
-			"\"sigma\":%.3f,\"rejected\":[%u,%u,%u,%u],\"overflow\":%u,\"spot_xy\":[",
-			hd->index, k, lane_t0, nm, proc_ms, (double)st->sigma, st->rejected[0], st->rejected[1],
-			st->rejected[2], st->rejected[3], st->overflow);
+			"{\"index\":%u,\"k\":%" PRId64 ",\"lane_t0_us\":%" PRId64 ",\"spots\":%d,"
+			"\"proc_ms\":%.3f,\"wall_ms\":%.3f,\"sigma\":%.3f,"
+			"\"rejected\":[%u,%u,%u,%u],\"overflow\":%u,\"spot_xy\":[",
+			hd->index, k, lane_t0, nm, proc_ms, wall_ms, (double)st->sigma, st->rejected[0],
+			st->rejected[1], st->rejected[2], st->rejected[3], st->overflow);
 		for (int i = 0; i < nm; i++) {
 			fprintf(h->frame_log, "%s[%.3f,%.3f,%.1f,%u,%u,%.2f]", (i > 0) ? "," : "", (double)ms[i].x_mm,
 				(double)ms[i].y_mm, (double)ms[i].snr, ms[i].flags, dflags[i], (double)dsig[i]);
@@ -649,18 +697,23 @@ static void summary(const host *h)
 {
 	const at_match_stats *m = &h->match.stats;
 
-	printf("{\"frames\":%u,\"camera_dropped\":%u,\"frames_before_sync\":%u,\"can_in\":%u,\"aim\":%u,"
-	       "\"hits\":{\"OK\":%u,\"NO_SPOT\":%u,\"OFF_SCREEN\":%u,\"AMBIGUOUS\":%u,\"SATURATED\":%u,\"DROPPED\":%u},"
-	       "\"status_frames\":%u,\"proc_ms\":{\"mean\":%.3f,\"max\":%.3f,\"wall_max\":%.3f},"
-	       "\"heap_bytes\":{\"after_first_frame\":%zu,\"end\":%zu},\"frame_time_residual_max_us\":%" PRId64
-	       ",\"drift_ppm\":%.2f,\"match\":{\"frames\":%u,\"dropped\":%u,\"stray_spots\":%u,\"shots\":%u,"
-	       "\"late_shots\":%u,\"ambiguous\":%u,\"unknown_node\":%u,\"reacquired\":%u,\"confirmed\":%u},\"can_bad_lines\":%u}\n",
-	       h->frames, h->dropped, h->no_sync_frames, h->can_in_frames, h->aims, h->hits[0], h->hits[1], h->hits[2],
-	       h->hits[3], h->hits[4], h->hits[5], h->status_sent,
+	printf("{\"frames\":%u,\"camera_dropped\":%u,\"frames_before_sync\":%u,\"frames_bad_size\":%u,\"can_in\":%u,"
+	       "\"aim\":%u,\"hits\":{\"OK\":%u,\"NO_SPOT\":%u,\"OFF_SCREEN\":%u,\"AMBIGUOUS\":%u,\"SATURATED\":%u,"
+	       "\"DROPPED\":%u,\"invalid\":%u},\"status_frames\":%u,"
+	       "\"proc_ms\":{\"mean\":%.3f,\"max\":%.3f,\"wall_max\":%.3f},"
+	       "\"heap_bytes\":{\"after_first_frame\":%zu,\"end\":%zu},\"frame_time_residual_max_us\":%" PRId64 ","
+	       "\"drift_ppm\":%.2f,\"sync\":{\"received\":%u,\"rejected\":%u,\"resets\":%u},"
+	       "\"match\":{\"frames\":%u,\"dropped\":%u,\"stray_spots\":%u,\"shots\":%u,\"late_shots\":%u,"
+	       "\"ambiguous\":%u,\"unknown_node\":%u,\"reacquired\":%u,\"confirmed\":%u,\"shots_lost\":%u,"
+	       "\"untracked_shots\":%u},"
+	       "\"can_bad_lines\":%u,\"can_tx_dropped\":%u,\"can_user_stamps\":%u,\"can_rx_delay_max_us\":%" PRId64 "}\n",
+	       h->frames, h->dropped, h->no_sync_frames, h->bad_size_frames, h->can_in_frames, h->aims, h->hits[0],
+	       h->hits[1], h->hits[2], h->hits[3], h->hits[4], h->hits[5], h->hits_invalid, h->status_sent,
 	       (h->frames > 0U) ? (h->proc_sum_ms / h->frames) : 0.0, h->proc_max_ms, h->proc_wall_max_ms,
-	       h->heap_first_frame, h->heap_end, h->p07_max_us,
-	       at_ts_drift_ppm(&h->ts), m->frames, m->dropped, m->stray_spots, m->shots, m->late_shots, m->ambiguous,
-	       m->unknown_node, m->reacquired, m->confirmed, h->can.bad_lines);
+	       h->heap_first_frame, h->heap_end, h->p07_max_us, at_ts_drift_ppm(&h->ts), h->ts.updates,
+	       h->ts.rejected, h->ts.resets, m->frames, m->dropped, m->stray_spots, m->shots, m->late_shots,
+	       m->ambiguous, m->unknown_node, m->reacquired, m->confirmed, m->shots_lost, m->untracked_shots,
+	       h->can.bad_lines, h->can.tx_dropped, h->can.user_stamps, h->can.rx_delay_max_us);
 }
 
 static void usage(void)
@@ -669,7 +722,20 @@ static void usage(void)
 		"usage: aim_host --frames FILE|- --calib calib.json --weapon NODE:SLOT [--weapon ...]\n"
 		"                (--can-in IN --can-out OUT | --can IFNAME [--can-log OUT])\n"
 		"                [--slots N] [--aar FILE] [--frame-log FILE] [--readout-us US]\n"
-		"                [--zero-in FILE] [--zero NODE:X:Y:N --zero-out FILE]\n");
+		"                [--zero-in FILE] [--zero NODE:X:Y:N --zero-out FILE] [--rt]\n");
+}
+
+/* --rt: lock the memory (no page faults later) and run the loop under SCHED_FIFO. Best effort. */
+static void go_realtime(void)
+{
+	struct sched_param sp = {.sched_priority = RT_PRIORITY};
+
+	if (mlockall(MCL_CURRENT | MCL_FUTURE) != 0) {
+		fprintf(stderr, "aim_host: --rt: mlockall: %s (continuing)\n", strerror(errno));
+	}
+	if (sched_setscheduler(0, SCHED_FIFO, &sp) != 0) {
+		fprintf(stderr, "aim_host: --rt: SCHED_FIFO: %s (continuing)\n", strerror(errno));
+	}
 }
 
 static int load_zero(host *h)
@@ -705,6 +771,7 @@ int main(int argc, char **argv)
 		{"aar", required_argument, NULL, 'a'},      {"frame-log", required_argument, NULL, 'F'},
 		{"readout-us", required_argument, NULL, 'r'}, {"zero-in", required_argument, NULL, 'Z'},
 		{"zero", required_argument, NULL, 'z'},     {"zero-out", required_argument, NULL, 'O'},
+		{"rt", no_argument, NULL, 'R'},
 		{NULL, 0, NULL, 0},
 	};
 	int c;
@@ -741,6 +808,7 @@ int main(int argc, char **argv)
 			}
 			break;
 		case 'O': h.zero_out = optarg; break;
+		case 'R': h.rt = true; break;
 		default: usage(); return 1;
 		}
 	}
@@ -789,6 +857,9 @@ int main(int argc, char **argv)
 		if (h.frame_log != NULL) {
 			(void)setvbuf(h.frame_log, frame_log_buf, _IOFBF, sizeof(frame_log_buf));
 		}
+	}
+	if (h.rt) {
+		go_realtime(); /* MCL_FUTURE also locks the detector block allocated at the first frame */
 	}
 	rc = (h.can_if != NULL) ? run_socket(&h) : run_files(&h);
 	flush(&h);

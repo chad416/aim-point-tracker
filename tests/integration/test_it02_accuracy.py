@@ -3,7 +3,7 @@ screen, steady aim, nominal emitter signal, after calibration. Hits are
 measured against the simulator's ground truth.
 
 P01: <= 2 mm RMS and <= 5 mm at the 99th percentile over the whole screen.
-(HIT frames on CAN, F10, come with match in week 3.)
+(The HIT frames on CAN, F10, are checked through aim_host in IT03-IT07.)
 """
 from __future__ import annotations
 

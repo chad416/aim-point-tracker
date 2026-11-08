@@ -23,11 +23,16 @@ static bool lost(const at_track *t, const at_track_cfg *c, int64_t t_us)
 
 void at_track_update(at_track *t, const at_track_cfg *c, int64_t t_us, double x, double y)
 {
-	if (lost(t, c, t_us) || (t_us <= t->t_us)) {
-		if (t->active && (t_us > t->t_us)) {
+	if (t->active && (t_us <= t->t_us)) {
+		/* Not after the last update (a second spot for the same pulse, a stale one): ignored. */
+		t->ignored++;
+		return;
+	}
+	if (lost(t, c, t_us)) {
+		if (t->active) {
 			t->restarts++;
 		}
-		/* (Re)start: position only; an update at the same or an earlier time also restarts. */
+		/* (Re)start: position only. */
 		t->active = true;
 		t->t_us = t_us;
 		t->x = x;

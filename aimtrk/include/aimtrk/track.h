@@ -22,13 +22,14 @@ typedef struct {
 	double x, y;    /* mm */
 	double vx, vy;  /* mm/s */
 	uint32_t updates;
-	uint32_t restarts;
+	uint32_t restarts; /* lost, then started again by a new spot */
+	uint32_t ignored;  /* updates not later than the last one: ignored */
 } at_track;
 
 void at_track_cfg_default(at_track_cfg *c);
 void at_track_reset(at_track *t);
 
-/* A measured aim point at lane time t_us (mm). */
+/* A measured aim point at lane time t_us (mm). An update not later than the last one is ignored. */
 void at_track_update(at_track *t, const at_track_cfg *c, int64_t t_us, double x, double y);
 
 /* Predicted aim point at lane time t_us. False if there is no track or it is lost. */

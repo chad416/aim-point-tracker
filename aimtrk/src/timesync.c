@@ -1,5 +1,5 @@
 /*
- * Lane time from SYNC, SPEC F06 (the weapon firmware's scheme, S1 F12).
+ * Lane time from SYNC, SPEC F06 (the weapon firmware's scheme, its F12).
  */
 #include <math.h>
 #include <string.h>
@@ -53,26 +53,71 @@ static void fit(at_timesync *ts)
 	ts->synced = true;
 }
 
-void at_ts_add(at_timesync *ts, int64_t local_us, uint32_t lane_us)
+static void push(at_timesync *ts, int64_t local_us, int64_t lane)
 {
-	int64_t lane = unwrap(ts, lane_us);
-
-	if (ts->synced) {
-		double err = (double)lane - (ts->ref_lane + (ts->slope * (double)(local_us - ts->ref_local)));
-
-		if (fabs(err) > AT_TS_JUMP_US) {
-			ts->n = 0U;
-			ts->head = 0U;
-			ts->resets++;
-		}
-	}
 	ts->local[ts->head] = local_us;
 	ts->lane[ts->head] = lane;
 	ts->head = (uint8_t)((ts->head + 1U) % AT_TS_WINDOW);
 	if (ts->n < AT_TS_WINDOW) {
 		ts->n++;
 	}
+}
+
+/* The held-out SYNCs agree with each other: they describe one new lane-time offset. */
+static bool pending_consistent(const at_timesync *ts)
+{
+	double lo = ts->pend_err[0];
+	double hi = ts->pend_err[0];
+
+	for (uint8_t i = 1U; i < ts->n_pend; i++) {
+		lo = fmin(lo, ts->pend_err[i]);
+		hi = fmax(hi, ts->pend_err[i]);
+	}
+	return (hi - lo) <= (double)AT_TS_GATE_US;
+}
+
+void at_ts_add(at_timesync *ts, int64_t local_us, uint32_t lane_us)
+{
+	int64_t lane = unwrap(ts, lane_us);
+
 	ts->updates++;
+	if (ts->synced) {
+		double err = (double)lane - (ts->ref_lane + (ts->slope * (double)(local_us - ts->ref_local)));
+
+		if (!(fabs(err) <= (double)AT_TS_GATE_US)) {
+			/* An outlier (a late reception stamp), or one of the first SYNCs after a step. */
+			ts->rejected++;
+			ts->pend_local[ts->n_pend] = local_us;
+			ts->pend_lane[ts->n_pend] = lane;
+			ts->pend_err[ts->n_pend] = err;
+			ts->n_pend++;
+			if (ts->n_pend < AT_TS_STEP_N) {
+				return;
+			}
+			if (!pending_consistent(ts)) {
+				/* Scattered, not a step: forget the oldest and keep waiting. */
+				for (uint8_t i = 1U; i < AT_TS_STEP_N; i++) {
+					ts->pend_local[i - 1U] = ts->pend_local[i];
+					ts->pend_lane[i - 1U] = ts->pend_lane[i];
+					ts->pend_err[i - 1U] = ts->pend_err[i];
+				}
+				ts->n_pend--;
+				return;
+			}
+			/* A step of the lane time: restart the fit on the held-out SYNCs. */
+			ts->n = 0U;
+			ts->head = 0U;
+			ts->resets++;
+			for (uint8_t i = 0U; i < ts->n_pend; i++) {
+				push(ts, ts->pend_local[i], ts->pend_lane[i]);
+			}
+			ts->n_pend = 0U;
+			fit(ts);
+			return;
+		}
+	}
+	ts->n_pend = 0U;
+	push(ts, local_us, lane);
 	fit(ts);
 }
 

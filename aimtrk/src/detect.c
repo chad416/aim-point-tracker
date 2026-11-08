@@ -30,7 +30,7 @@ void at_detect_cfg_default(at_detect_cfg *cfg, uint16_t width, uint16_t height)
 		.min_snr = 8.0F,
 		.sat_level = 255,
 		.max_runs = 8192,
-		.max_blobs = 1024, /* a scene change can leave hundreds of spot-sized fragments (week 4) */
+		.max_blobs = 1024, /* a scene change can leave hundreds of spot-sized fragments (M4) */
 	};
 }
 
@@ -126,6 +126,8 @@ static void cell_sums(at_detect *d, const uint8_t *img, size_t stride)
 }
 
 /* A cell sum is 16 pixels, so sum * 16 is the cell mean in DN * 256 (at most 65280). */
+_Static_assert((256 % (AT_BG_CELL * AT_BG_CELL)) == 0, "SUM_TO_BG needs 256 / cell area to be exact");
+_Static_assert((AT_BG_CELL * AT_BG_CELL * 255) <= UINT16_MAX, "a cell sum must fit the 16-bit cellsum");
 #define SUM_TO_BG(s) ((int32_t)(s) * (256 / (AT_BG_CELL * AT_BG_CELL)))
 
 void at_detect_learn(at_detect *d, const uint8_t *img, size_t stride)
@@ -297,7 +299,7 @@ static int scan(at_detect *d, const uint8_t *img, size_t stride)
 }
 
 /* Paint the blob's runs, dilated by one pixel, into the window mask; fill the window background. */
-static void window(at_detect *d, const at_blob *b, int nruns, at_cwin *win)
+static void window(at_detect *d, const at_blob *b, at_cwin *win)
 {
 	int x0 = (b->x0 > 0U) ? (b->x0 - 1) : 0;
 	int y0 = (b->y0 > 0U) ? (b->y0 - 1) : 0;
@@ -307,7 +309,7 @@ static void window(at_detect *d, const at_blob *b, int nruns, at_cwin *win)
 	int h = y1 - y0 + 1;
 
 	memset(d->mask, 0, (size_t)w * (size_t)h);
-	for (int i = 0; i < nruns; i++) {
+	for (int i = b->root; i <= b->last; i++) { /* the blob's runs lie in root..last */
 		const at_run *r = &d->runs[i];
 
 		if ((r->label != b->root) || (r->y < b->y0) || (r->y > b->y1)) {
@@ -375,7 +377,7 @@ static bool near_peak(const int *px, const int *py, int n, int x, int y)
  * bright side of a scene change does not. It is located against that level.
  * Returns the new spot count.
  */
-static int recover(at_detect *d, const at_blob *b, int nruns, const uint8_t *img, size_t stride, float sigma,
+static int recover(at_detect *d, const at_blob *b, const uint8_t *img, size_t stride, float sigma,
 		   int32_t delta256, at_spot *spots, int nspots, int max_spots)
 {
 	const at_detect_cfg *cfg = &d->cfg;
@@ -392,7 +394,7 @@ static int recover(at_detect *d, const at_blob *b, int nruns, const uint8_t *img
 		double best = 0.0;
 		int bx = -1, by = -1;
 
-		for (int i = 0; i < nruns; i++) {
+		for (int i = b->root; i <= b->last; i++) {
 			const at_run *r = &d->runs[i];
 
 			if (r->label != b->root) {
@@ -503,7 +505,7 @@ static int recover(at_detect *d, const at_blob *b, int nruns, const uint8_t *img
  * half its peak, or the peak is at least min_snr noise sigmas above it. A
  * fragment of a scene change whose step is about one detection threshold high
  * (noise splits it into small blobs) fails: its surroundings are the step
- * itself (week 4, the demo session at an 8 DN projector leak).
+ * itself (M4, the demo session at an 8 DN projector leak).
  */
 static bool stands_out(const at_detect *d, const uint8_t *img, size_t stride, const at_spot *s, float sigma)
 {
@@ -551,7 +553,7 @@ int at_detect_frame(at_detect *d, const uint8_t *img, size_t stride, at_spot *sp
 	 * the cell and its 8 neighbours. A cell across a sharp edge (a window
 	 * frame, a person) averages its bright and dark parts; against its own
 	 * mean the bright part would sit near the threshold and its noise would
-	 * make spots (week 3, IT06). On a flat background this adds about 0.3 DN.
+	 * make spots (M3, IT06). On a flat background this adds about 0.3 DN.
 	 */
 	float sigma = at_detect_noise(d, img, stride);
 	double delta = fmax((double)cfg->k_sigma * (double)sigma, (double)cfg->t_min);
@@ -597,7 +599,7 @@ int at_detect_frame(at_detect *d, const uint8_t *img, size_t stride, at_spot *sp
 	 * Areas first, summed at each root in blob_of, so that a blob too small to
 	 * be a spot never takes a place in the blob table: a scene change about
 	 * one threshold high breaks up into hundreds of them in the noise, and a
-	 * full table dropped every blob after them, spots included (week 4, IT06
+	 * full table dropped every blob after them, spots included (M4, IT06
 	 * at 8 DN). A blob's root is its first run (unite() keeps the smaller
 	 * index), so the roots come in raster order. The roots are final now and
 	 * stay in the labels, so window() can compare them directly.
@@ -623,7 +625,8 @@ int at_detect_frame(at_detect *d, const uint8_t *img, size_t stride, at_spot *sp
 				d->stats.overflow |= AT_OVF_BLOBS;
 				d->blob_of[i] = DROPPED;
 			} else {
-				d->blobs[nblobs] = (at_blob){(uint16_t)i, r->x0, r->x1, r->y, r->y, 0U};
+				d->blobs[nblobs] = (at_blob){.root = (uint16_t)i, .last = (uint16_t)i, .x0 = r->x0,
+							     .x1 = r->x1, .y0 = r->y, .y1 = r->y};
 				d->blob_of[i] = (uint16_t)nblobs++;
 			}
 		}
@@ -636,6 +639,7 @@ int at_detect_frame(at_detect *d, const uint8_t *img, size_t stride, at_spot *sp
 		b->x0 = (r->x0 < b->x0) ? r->x0 : b->x0;
 		b->x1 = (r->x1 > b->x1) ? r->x1 : b->x1;
 		b->y1 = r->y; /* runs come in row order */
+		b->last = (uint16_t)i;
 	}
 	/* 5: rejection and centroids. */
 	memset(d->freeze, 0, (size_t)ncells);
@@ -646,13 +650,13 @@ int at_detect_frame(at_detect *d, const uint8_t *img, size_t stride, at_spot *sp
 
 		if ((b->area > cfg->max_area) || (ext_w > cfg->max_extent) || (ext_h > cfg->max_extent)) {
 			d->stats.rejected[AT_REJ_LARGE]++;
-			nspots = recover(d, b, nruns, img, stride, sigma, delta256, spots, nspots, max_spots);
+			nspots = recover(d, b, img, stride, sigma, delta256, spots, nspots, max_spots);
 			continue;
 		}
 		at_cwin win;
 		at_spot s;
 
-		window(d, b, nruns, &win);
+		window(d, b, &win);
 		win.px = img + ((size_t)win.y0 * stride) + (size_t)win.x0;
 		win.stride = stride;
 		if ((at_centroid(&win, sigma, cfg->sat_level, &s) != 0) || (s.snr < cfg->min_snr)) {
@@ -684,7 +688,7 @@ int at_detect_frame(at_detect *d, const uint8_t *img, size_t stride, at_spot *sp
 	 * 1: background update, except under spots. A cell whose mean moved by more
 	 * than half the detection threshold is a change of the scene (a person
 	 * walking through, the projected image changing), not noise: it takes the
-	 * new value at once instead of trailing it for many frames (week 3, IT06).
+	 * new value at once instead of trailing it for many frames (M3, IT06).
 	 */
 	int64_t bg_sum = 0;
 	int32_t snap = delta256 / 2;

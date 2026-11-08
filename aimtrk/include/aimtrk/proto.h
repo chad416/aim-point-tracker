@@ -1,10 +1,11 @@
 /*
  * CAN frames of the tracker (SPEC §7, protocol/tracker.dbc).
  *
- * 11-bit ID = (function << 7) | node. The tracker reads S1's SYNC,
- * SHOT_EVENT and SHOT_DETAIL and sends HIT and AIM (ID carries the shooter's
- * node) and TRK_STATUS (node 0x7E). Little-endian (Intel) signal layout, as
- * the DBC; a unit test checks every encoder against cantools.
+ * 11-bit ID = (function << 7) | node. The tracker reads the lane's SYNC and
+ * the weapons' SHOT_EVENT and SHOT_DETAIL, and sends HIT and AIM (ID carries
+ * the shooter's node) and TRK_STATUS (node 0x7E). Little-endian (Intel)
+ * signal layout, as the DBC; a unit test checks every encoder against
+ * cantools.
  */
 #ifndef AIMTRK_PROTO_H_
 #define AIMTRK_PROTO_H_
@@ -40,6 +41,7 @@ enum at_hit_result {
 #define AT_FAULT_DETECT_OVERFLOW 0x08U
 #define AT_FAULT_SLOW            0x10U
 #define AT_FAULT_NO_SYNC         0x20U
+#define AT_FAULT_CAN_LOSS        0x40U /* a frame could not be sent, or a SHOT_EVENT was not taken */
 
 typedef struct {
 	uint16_t shot_no;

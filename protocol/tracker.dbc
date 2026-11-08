@@ -47,12 +47,13 @@ BO_ 1662 TRK_STATUS: 7 TRACKER
  SG_ cal_age_h : 40|8@1+ (1,0) [0|255] "h" LANE
  SG_ faults : 48|8@1+ (1,0) [0|255] "" LANE
 
-CM_ "11-bit ID = (function << 7) | node_id, as trainer.dbc (S1). SYNC, SHOT_EVENT and SHOT_DETAIL are S1's frames (trainer.dbc 0.4), unchanged; the tracker reads them. HIT and AIM are defined for node 1 and use ID + (N - 1) for weapon N: the ID names the shooter, not the tracker. TRK_STATUS comes from the tracker, node 0x7E.";
+CM_ "11-bit ID = (function << 7) | node_id, as trainer.dbc of the weapon firmware (trainer-weapon-firmware-twin). SYNC, SHOT_EVENT and SHOT_DETAIL are its frames (trainer.dbc 0.4), unchanged; the tracker reads them. HIT and AIM are defined for node 1 and use ID + (N - 1) for weapon N: the ID names the shooter, not the tracker. TRK_STATUS comes from the tracker, node 0x7E.";
 CM_ BO_ 1281 "One per SHOT_EVENT, sent when the shot frame is settled (SPEC 6.5). Positions in screen mm (x right, y up, origin at the screen centre) after zeroing, 0.25 mm steps, saturating at +-2048 mm. latency = HIT time - break time, lane time, saturating at 25.5 ms.";
 CM_ SG_ 1281 result "0 OK, 1 NO_SPOT, 2 OFF_SCREEN, 3 AMBIGUOUS, 4 SATURATED, 5 DROPPED. x_mm and y_mm are valid for OK, OFF_SCREEN and SATURATED.";
 CM_ SG_ 1281 quality "Peak SNR of the spot, saturating at 255; 0 when there is no position.";
 CM_ BO_ 1409 "One per weapon per aim slot frame with a spot (SPEC 6.5). frame_seq = exposure number k modulo 65536.";
 CM_ BO_ 1662 "1 Hz. Frame rate, frames dropped in the last second, worst processing time per frame, mean background (ambient IR), calibration age.";
-CM_ SG_ 1662 faults "bit0 NO_CALIBRATION, bit1 CALIBRATION_OLD (> 24 h), bit2 FRAMES_DROPPED, bit3 DETECT_OVERFLOW, bit4 SLOW (processing > 3 ms), bit5 NO_SYNC.";
+CM_ SG_ 1662 faults "bit0 NO_CALIBRATION, bit1 CALIBRATION_OLD (> 24 h), bit2 FRAMES_DROPPED, bit3 DETECT_OVERFLOW, bit4 SLOW (processing > 3 ms), bit5 NO_SYNC, bit6 CAN_LOSS (since the last TRK_STATUS a frame could not be sent, or a SHOT_EVENT was not taken).";
+CM_ SG_ 1662 fps_x10 "Frame rate. The name keeps the raw encoding (fps x 10 in a u16); with the factor 0.1 the decoded value is in fps.";
 
 VAL_ 1281 result 0 "OK" 1 "NO_SPOT" 2 "OFF_SCREEN" 3 "AMBIGUOUS" 4 "SATURATED" 5 "DROPPED" ;

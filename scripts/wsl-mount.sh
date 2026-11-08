@@ -1,12 +1,13 @@
 #!/usr/bin/env bash
-# Bind-mount this repository (on the Windows drive) at a path without spaces
-# inside WSL. Zephyr's build and twister break on paths containing spaces, and
-# a symlink is not enough because twister resolves it to the real path.
-# Usage (inside WSL, as root): bash "<repo>/scripts/wsl-mount.sh" [mount point]
+# Bind-mount this repository at a path without spaces (WSL or Linux, as root).
+# Zephyr's build and twister break on paths containing spaces, and a symlink is
+# not enough because twister resolves it to the real path.
+# Usage: bash "<repo>/scripts/wsl-mount.sh" [mount point]
+#        mount point default: $AIMTRK_SRC, else ~/aimtrk-src
 set -euo pipefail
 
 REPO="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
-TARGET="${1:-$HOME/aimtrk-src}"
+TARGET="${1:-${AIMTRK_SRC:-$HOME/aimtrk-src}}"
 
 if mountpoint -q "$TARGET"; then
 	echo "already mounted: $TARGET"

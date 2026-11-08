@@ -372,7 +372,7 @@ ZTEST(detect, test_table_limits)
 
 	/*
 	 * Blobs too small to be a spot take no slot: still two slots, and a spot
-	 * after forty 2-pixel specks in raster order is found (week 4: a scene
+	 * after forty 2-pixel specks in raster order is found (M4: a scene
 	 * change about one threshold high breaks up into hundreds of them).
 	 */
 	static uint8_t specks[W * H];

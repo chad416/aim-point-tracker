@@ -1,25 +1,25 @@
-"""IT10 co-simulation, tracker side (SPEC Â§9.3 IT10).
+"""IT10 co-simulation, tracker side (SPEC §9.3 IT10).
 
-S1's firmware runs in Renode (tools/cosim/s1_lane_driver.py, on S1's
+The weapon firmware runs in Renode (tools/cosim/s1_lane_driver.py, on its
 sim/lane.resc) and records every emitter gate edge and every CAN frame the two
 weapons send. This module turns that recording into what aim_host sees and runs
 it:
 
-  can_in.log  the lane's SYNC frames as injected, and S1's own frames
+  can_in.log  the lane's SYNC frames as injected, and the weapons' own frames
               (SHOT_EVENT, SHOT_DETAIL, STATUS, ...) at the virtual time they
               were sent, all on the tracker's clock (offset and drift against
               lane time, as in the scenarios)
-  frames      one camera frame per exposure: each pulse S1 actually gave
+  frames      one camera frame per exposure: each pulse the firmware actually gave
               (gate on -> off, in lane time) is rendered where that weapon aims
               at that moment, with the part of it that falls inside the 1 ms
               exposure; nothing is rendered for a weapon that did not flash
 
-So whether a HIT has a position depends on S1 putting its pulses into the
+So whether a HIT has a position depends on the firmware putting its pulses into the
 right exposures, on its own lane-time estimate, and on its SHOT_EVENT carrying
 the right break time.
 
 Run:  python tools/cosim/cosim.py [--events FILE] [--renode] [--out DIR]
-  --renode  run Renode first (needs S1's ELF and repository, see run_renode()).
+  --renode  run Renode first (needs the weapon firmware's ELF and repository, see firmware_paths()).
 """
 from __future__ import annotations
 
@@ -57,12 +57,22 @@ def aim(node: int, t_s: float) -> tuple[float, float]:
             -200.0 + 180.0 * math.sin(1.1 * t_s) + 2 * math.cos(7 * t_s))
 
 
+def firmware_paths() -> tuple[str, str]:
+    """The weapon firmware (trainer-weapon-firmware-twin) for the Renode run, from the environment:
+      S1_ELF  its zephyr.elf     (default $AIMTRK_WS/build/app/zephyr/zephyr.elf)
+      S1_SIM  its sim/ directory (default $S1_SRC/sim; S1_SRC, its checkout, default ~/trainer-src)
+    AIMTRK_WS is the shared west workspace (default ~/trainer-ws), as in scripts/_env.sh."""
+    ws = os.environ.get("AIMTRK_WS", os.path.expanduser("~/trainer-ws"))
+    src = os.environ.get("S1_SRC", os.path.expanduser("~/trainer-src"))
+    return (os.environ.get("S1_ELF", os.path.join(ws, "build", "app", "zephyr", "zephyr.elf")),
+            os.environ.get("S1_SIM", os.path.join(src, "sim")))
+
+
 def run_renode(out: pathlib.Path) -> None:
-    """Run S1's lane in Renode with the driver. Paths (inside Linux/WSL, no spaces: Renode's
-    monitor cannot take them): S1_ELF (zephyr.elf), S1_SIM (S1's sim/ directory), COSIM_DRIVER."""
+    """Run the weapon firmware's lane in Renode with the driver. Paths (inside Linux/WSL, no
+    spaces: Renode's monitor cannot take them): firmware_paths(), and COSIM_DRIVER."""
     out = out.resolve()  # the driver runs in Renode's own directory: a relative path would land there
-    elf = os.environ.get("S1_ELF", "/root/trainer-ws/build/app/zephyr/zephyr.elf")
-    sim = os.environ.get("S1_SIM", "/root/trainer-src/sim")
+    elf, sim = firmware_paths()
     drv = pathlib.Path(os.environ.get("COSIM_DRIVER", str(pathlib.Path(__file__).with_name("s1_lane_driver.py"))))
     if " " in str(drv):  # the monitor cannot take the path: use a copy next to the output
         (out.parent / drv.name).write_bytes(drv.read_bytes())
@@ -120,7 +130,7 @@ def pulses(rec: Recording) -> list[dict]:
 
 
 def shot_events(rec: Recording) -> list[dict]:
-    """S1's SHOT_EVENT frames: shot number and the break time it carries (lane time, 32 bits)."""
+    """The weapons' SHOT_EVENT frames: shot number and the break time it carries (lane time, 32 bits)."""
     out = []
     for t, node, fid, data in rec.sent:
         if fid >> 7 == FN_SHOT_EVENT and len(data) >= 6:
@@ -208,8 +218,8 @@ def build_and_run(rec: Recording, run_dir: pathlib.Path, calib: pathlib.Path, ca
 
 def main() -> None:
     ap = argparse.ArgumentParser(description=__doc__.split("\n")[0])
-    ap.add_argument("--events", type=pathlib.Path, default=ROOT / "tests" / "data" / "s1_v0.6.1_lane.txt")
-    ap.add_argument("--renode", action="store_true", help="run S1 in Renode first")
+    ap.add_argument("--events", type=pathlib.Path, default=ROOT / "tests" / "data" / "s1_v0.6.2_lane.txt")
+    ap.add_argument("--renode", action="store_true", help="run the weapon firmware in Renode first")
     ap.add_argument("--calib", type=pathlib.Path, default=ROOT / "results" / "calib.json")
     ap.add_argument("--out", type=pathlib.Path, default=ROOT / "results" / "cosim_run")
     a = ap.parse_args()

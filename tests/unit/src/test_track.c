@@ -53,7 +53,16 @@ ZTEST(track, test_lost_and_restart)
 	zassert_within(x, -300.0, 1e-9);
 	zassert_within(y, 400.0, 1e-9);
 
-	/* An update at the same time restarts as well (no division by zero). */
-	at_track_update(&t, &c, 900000, -310.0, 400.0);
-	zassert_within(t.x, -310.0, 1e-9);
+	/* An update at the same or an earlier time is ignored: no division by zero, the velocity is kept. */
+	at_track_update(&t, &c, 920000, -296.0, 400.0);
+	double vx = t.vx;
+
+	zassert_true(vx > 0.0);
+	at_track_update(&t, &c, 920000, -310.0, 400.0);
+	at_track_update(&t, &c, 910000, -320.0, 400.0);
+	zassert_equal(t.ignored, 2U);
+	zassert_equal(t.restarts, 1U, "not a restart");
+	zassert_equal(t.updates, 2U);
+	zassert_within(t.vx, vx, 1e-12);
+	zassert_true(t.x > -300.0, "position not moved by the ignored updates");
 }

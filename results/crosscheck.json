@@ -16,8 +16,8 @@
   },
   "truth_rms_px_unsaturated": 0.0391,
   "c_ms_per_frame": {
-    "mean": 1.076,
-    "max": 1.46
+    "mean": 1.08,
+    "max": 1.514
   },
   "geometry_vs_opencv": {
     "distort_max_diff": 1.1102230246251565e-16,

@@ -21,6 +21,7 @@
 #include "aimtrk/geom.h"
 
 #define AT_CAL_MAX_POINTS 64
+#define AT_CAL_FIND_ALL   0 /* at_calib_cfg.min_found: every grid point must be found */
 
 /* at_calib_report.status */
 #define AT_CAL_OK           0
@@ -33,7 +34,7 @@ typedef struct {
 	double max_fit_rms_px;     /* P06: 0.3 */
 	double max_holdout_rms_px; /* P06: 0.5 */
 	double gate_px;            /* ordering: a dot must lie this close to its predicted grid point */
-	int min_found;             /* grid points that must be found; 0 = all */
+	int min_found;             /* grid points that must be found; AT_CAL_FIND_ALL (0, the default): all */
 	int holdout_every;         /* every n-th grid point is held out; 0 = none */
 	int max_iter;              /* Levenberg-Marquardt iterations */
 } at_calib_cfg;

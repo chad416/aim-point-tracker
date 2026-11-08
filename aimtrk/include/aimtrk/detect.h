@@ -85,7 +85,8 @@ typedef struct {
 } at_run;
 
 typedef struct {
-	uint16_t root;
+	uint16_t root;           /* its first run (raster order) */
+	uint16_t last;           /* its last run: all its runs lie in root..last */
 	uint16_t x0, x1, y0, y1; /* bounding box */
 	uint32_t area;
 } at_blob;

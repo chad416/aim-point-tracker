@@ -9,7 +9,7 @@ error against the true position:
   unsaturated  radial RMS error vs peak SNR for spot sizes sigma_PSF 0.8-2.0 px;
                where it crosses the 0.1 px budget line (SPEC §3.3)
   noise-free   worst pixel-phase bias (8-bit quantisation only)
-  saturated    plain centroid vs rim fit, peak 1-20x full scale (sigma 1.2 px)
+  saturated    plain centroid vs rim fit, peak 150-6000 DN: up to 24x full scale (sigma 1.2 px)
 
 Usage: centroid_curve.py [--trials 400]
   -> results/centroid_curve.json, results/plots/centroid_snr.png, results/plots/centroid_saturation.png
@@ -39,7 +39,7 @@ BUDGET_PX = 0.1       # SPEC §3.3: centroid noise in the P01 error budget
 PEAKS = (5, 6, 8, 10, 12, 16, 20, 25, 32, 40, 50, 64, 80, 100, 128, 150, 180, 220)
 SAT_PEAKS = (150, 255, 400, 600, 1000, 1500, 2500, 4000, 6000)
 
-SERIES = ["#2a78d6", "#eb6834", "#1baf7a", "#eda100"]  # categorical slots 1-4 (as S2's plots)
+SERIES = ["#2a78d6", "#eb6834", "#1baf7a", "#eda100"]  # categorical slots 1-4 (as in motion-platform-controller's plots)
 INK, INK2, MUTED, GRID, SURFACE = "#0b0b0b", "#52514e", "#8a8984", "#e6e5e0", "#fcfcfb"
 
 

@@ -97,7 +97,7 @@ def test_two_weapons(lib, cam, calibration, tmp_path):
                          "truth": [round(s["x_mm"], 1), round(s["y_mm"], 1)],
                          "hit": [h["x_mm"], h["y_mm"]]})
 
-    # Bus load: the tracker's frames as measured, plus S1's frames at their documented rates.
+    # Bus load: the tracker's frames as measured, plus the weapons' frames at their documented rates.
     dur = scn.duration_s
     out_counts = {"HIT": len(out["hits"]), "AIM": len(out["aims"]), "TRK_STATUS": len(out["status"])}
     tracker_bps = (len(out["hits"]) * frame_bits(8) + len(out["aims"]) * frame_bits(6)

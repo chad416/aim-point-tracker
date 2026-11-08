@@ -4,3 +4,4 @@ twister-out*/
 __pycache__/
 logs/
 .ruff_cache/
+web/aimtrk.wasm

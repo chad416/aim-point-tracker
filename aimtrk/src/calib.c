@@ -17,7 +17,7 @@ void at_calib_cfg_default(at_calib_cfg *cfg)
 		.max_fit_rms_px = 0.3,
 		.max_holdout_rms_px = 0.5,
 		.gate_px = 30.0,
-		.min_found = 0,
+		.min_found = AT_CAL_FIND_ALL, /* every grid point: 54 of 54 for the 9 x 6 grid */
 		.holdout_every = 5,
 		.max_iter = 100,
 	};
@@ -215,6 +215,29 @@ static double cost(const double *p, const double *img, const double *gn, const i
 	return c;
 }
 
+/*
+ * At a minimum of the cost c (sum of squared residuals over n points): every
+ * Jacobian column is orthogonal to the residuals, to GTOL (MINPACK's gtol
+ * test, |J_k . r| <= GTOL * |J_k| * |r|), or the residuals are already at
+ * rounding level (RMS below 1e-9 px).
+ */
+#define GTOL 1e-6
+
+static bool at_minimum(const double *jtj, const double *jtr, double c, int n)
+{
+	if (c <= (1e-18 * (double)n)) {
+		return true;
+	}
+	for (int k = 0; k < NPAR; k++) {
+		double col = sqrt(fmax(jtj[(k * NPAR) + k], 0.0));
+
+		if (!(fabs(jtr[k]) <= (GTOL * col * sqrt(c)))) {
+			return false;
+		}
+	}
+	return true;
+}
+
 int at_calib_fit(const double *img, const double *grid, const int *match, int n_grid,
 		 const at_lens *nominal, const at_calib_cfg *cfg, double screen_w, double screen_h,
 		 at_geom *out, at_calib_report *rep)
@@ -323,7 +346,10 @@ int at_calib_fit(const double *img, const double *grid, const int *match, int n_
 			}
 		}
 		if (!stepped) {
-			converged = true; /* no step lowers the cost: at the minimum to working precision */
+			/* No step lowers the cost. A minimum only if the gradient vanishes there too. */
+			converged = at_minimum(jtj, jtr, c, n_fit);
+			it++;
+			break;
 		}
 	}
 	rep->iterations = it;
@@ -377,7 +403,8 @@ int at_calib_fit(const double *img, const double *grid, const int *match, int n_
 	}
 	rep->fit_rms_px = sqrt(sf / n_fit);
 	rep->holdout_rms_px = (rep->n_holdout > 0) ? sqrt(sh / rep->n_holdout) : 0.0;
-	if ((rep->fit_rms_px > cfg->max_fit_rms_px) || (rep->holdout_rms_px > cfg->max_holdout_rms_px)) {
+	/* Written so that a NaN residual is refused too. */
+	if (!(rep->fit_rms_px <= cfg->max_fit_rms_px) || !(rep->holdout_rms_px <= cfg->max_holdout_rms_px)) {
 		rep->status = AT_CAL_RESIDUAL;
 		return rep->status;
 	}

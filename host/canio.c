@@ -13,6 +13,8 @@
 #include <string.h>
 #include <sys/ioctl.h>
 #include <sys/socket.h>
+#include <sys/uio.h>
+#include <time.h>
 #include <unistd.h>
 
 /* Static buffer for the sent-frames log, so stdio does not allocate one on first use. */
@@ -84,16 +86,30 @@ int canio_open_files(canio *c, const char *in_path, const char *out_path)
 	}
 	c->out = fopen(out_path, "w");
 	if (c->out == NULL) {
+		canio_close(c);
 		return -1;
 	}
 	(void)setvbuf(c->out, out_buf, _IOFBF, sizeof(out_buf));
 	return 0;
 }
 
+/* Close the socket without losing the errno that made the caller give up. */
+static int fail_socket(canio *c)
+{
+	int e = errno;
+
+	(void)close(c->sock);
+	c->sock = -1;
+	errno = e;
+	return -1;
+}
+
 int canio_open_socket(canio *c, const char *ifname, const char *log_path)
 {
 	struct ifreq ifr;
 	struct sockaddr_can addr;
+	int one = 1;
+	int flags;
 
 	memset(c, 0, sizeof(*c));
 	c->socket_mode = true;
@@ -105,15 +121,22 @@ int canio_open_socket(canio *c, const char *ifname, const char *log_path)
 	memset(&ifr, 0, sizeof(ifr));
 	snprintf(ifr.ifr_name, sizeof(ifr.ifr_name), "%s", ifname);
 	if (ioctl(c->sock, SIOCGIFINDEX, &ifr) < 0) {
-		return -1;
+		return fail_socket(c);
 	}
 	memset(&addr, 0, sizeof(addr));
 	addr.can_family = AF_CAN;
 	addr.can_ifindex = ifr.ifr_ifindex;
 	if (bind(c->sock, (struct sockaddr *)&addr, sizeof(addr)) < 0) {
-		return -1;
+		return fail_socket(c);
 	}
-	(void)fcntl(c->sock, F_SETFL, O_NONBLOCK);
+	/* Kernel reception timestamps (see canio.h); without them every SYNC is stamped late by the loop. */
+	if (setsockopt(c->sock, SOL_SOCKET, SO_TIMESTAMPNS, &one, sizeof(one)) < 0) {
+		return fail_socket(c);
+	}
+	flags = fcntl(c->sock, F_GETFL);
+	if ((flags < 0) || (fcntl(c->sock, F_SETFL, flags | O_NONBLOCK) < 0)) {
+		return fail_socket(c);
+	}
 	if (log_path != NULL) {
 		c->out = fopen(log_path, "w");
 		if (c->out != NULL) {
@@ -148,23 +171,64 @@ void canio_pop(canio *c)
 	c->have_next = false;
 }
 
+static int64_t ts_us(const struct timespec *t)
+{
+	return ((int64_t)t->tv_sec * 1000000) + (t->tv_nsec / 1000);
+}
+
+/*
+ * A kernel stamp (CLOCK_REALTIME) on CLOCK_MONOTONIC. The two clocks run at
+ * the same rate (NTP slews both); only a step of the wall clock between the
+ * reception and this call would show, and timesync holds such a SYNC out.
+ */
+static int64_t realtime_to_mono(const struct timespec *stamp)
+{
+	struct timespec rt, mono;
+
+	clock_gettime(CLOCK_REALTIME, &rt);
+	clock_gettime(CLOCK_MONOTONIC, &mono);
+	return ts_us(stamp) - (ts_us(&rt) - ts_us(&mono));
+}
+
 bool canio_recv(canio *c, int64_t now_us, can_msg *m)
 {
-	struct can_frame f;
-	ssize_t n = read(c->sock, &f, sizeof(f));
+	for (;;) {
+		struct can_frame f;
+		char ctrl[CMSG_SPACE(sizeof(struct timespec))];
+		struct iovec iov = {.iov_base = &f, .iov_len = sizeof(f)};
+		struct msghdr msg = {
+			.msg_iov = &iov, .msg_iovlen = 1, .msg_control = ctrl, .msg_controllen = sizeof(ctrl)};
+		int64_t stamp = now_us;
+		bool kernel = false;
 
-	if (n != (ssize_t)sizeof(f)) {
-		return false;
+		if (recvmsg(c->sock, &msg, MSG_DONTWAIT) != (ssize_t)sizeof(f)) {
+			return false; /* nothing waiting (EAGAIN), or not a classic CAN frame */
+		}
+		for (struct cmsghdr *cm = CMSG_FIRSTHDR(&msg); cm != NULL; cm = CMSG_NXTHDR(&msg, cm)) {
+			if ((cm->cmsg_level == SOL_SOCKET) && (cm->cmsg_type == SCM_TIMESTAMPNS)) {
+				struct timespec t;
+
+				memcpy(&t, CMSG_DATA(cm), sizeof(t));
+				stamp = realtime_to_mono(&t);
+				if ((now_us - stamp) > c->rx_delay_max_us) {
+					c->rx_delay_max_us = now_us - stamp;
+				}
+				kernel = true;
+			}
+		}
+		if ((f.can_id & (CAN_EFF_FLAG | CAN_RTR_FLAG | CAN_ERR_FLAG)) != 0U) {
+			continue; /* not a lane frame: skip it, read on */
+		}
+		if (!kernel) {
+			c->user_stamps++;
+		}
+		memset(m, 0, sizeof(*m));
+		m->t_local_us = stamp;
+		m->id = (uint16_t)(f.can_id & CAN_SFF_MASK);
+		m->len = (f.len <= 8U) ? f.len : 8U;
+		memcpy(m->data, f.data, m->len);
+		return true;
 	}
-	if ((f.can_id & (CAN_EFF_FLAG | CAN_RTR_FLAG | CAN_ERR_FLAG)) != 0U) {
-		return false;
-	}
-	memset(m, 0, sizeof(*m));
-	m->t_local_us = now_us;
-	m->id = (uint16_t)(f.can_id & CAN_SFF_MASK);
-	m->len = (f.len <= 8U) ? f.len : 8U;
-	memcpy(m->data, f.data, m->len);
-	return true;
 }
 
 int canio_send(canio *c, const can_msg *m)
@@ -182,7 +246,9 @@ int canio_send(canio *c, const can_msg *m)
 		f.can_id = m->id;
 		f.len = m->len;
 		memcpy(f.data, m->data, m->len);
+		/* Non-blocking: a full transmit queue (ENOBUFS, EAGAIN) drops the frame; it is counted, not waited for. */
 		if (write(c->sock, &f, sizeof(f)) != (ssize_t)sizeof(f)) {
+			c->tx_dropped++;
 			return -1;
 		}
 	}

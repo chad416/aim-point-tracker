@@ -1,0 +1,11 @@
+# Python packages for the simulator, the integration tests and the tools.
+# The Zephyr unit tests also need west (pip install west) and a west workspace.
+# Tested with: numpy 2.5.4, scipy 1.18.1, matplotlib 3.11.2, cantools 45.1.2,
+# pytest 9.2.0, ruff 0.14.2 (Python 3.12, Ubuntu 24.04).
+numpy
+scipy
+matplotlib
+cantools
+pytest
+ruff
+opencv-python-headless==5.0.0.93

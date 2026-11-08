@@ -15,7 +15,7 @@ The leak levels are not measured projector data (SPEC §12): they bracket a
 dark lane (4 DN), a typical one (12 DN) and a bright one (30 DN) against the
 8 DN detection floor, and 8 DN itself: there the moving silhouette's step is
 about one detection threshold high and noise breaks it into hundreds of small
-fragments (found by the demo session, week 4; SPEC §12). P03 is required at
+fragments (found by the demo session, M4; SPEC §12). P03 is required at
 all four levels.
 """
 from __future__ import annotations

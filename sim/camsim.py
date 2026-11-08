@@ -1,12 +1,12 @@
 #!/usr/bin/env python3
 """Camera simulator (SPEC §8): the projection screen as the lane's IR camera sees it.
 
-Week 1 scope: geometry (pinhole camera + Brown-Conrady distortion looking at
+Scope: geometry (pinhole camera + Brown-Conrady distortion looking at
 the screen plane), emitter spots (Gaussian PSF, energy from the pulse's
 overlap with the exposure, smear along the aim motion), the sensor (shot,
 read and fixed-pattern noise, hot pixels, 8-bit quantisation, saturation) and
-ground truth for every spot. Projector leak, reflections, a sunlit window and
-aim motion from S1's IMU recordings come with the interference set (week 3).
+ground truth for every spot. The interference set (projector leak, a sunlit
+window, glints, a passer-by) is in scenario.py.
 
 Coordinates
   screen  x right, y up, mm, origin at the screen centre (SPEC §6.3)

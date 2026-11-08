@@ -1,6 +1,7 @@
 /*
  * SPEC F06: lane time from SYNC (offset, drift, wrap, restart, drift bound,
- * inverse, unwrapping a 32-bit stamp). The same scheme as S1's timesync suite.
+ * inverse, unwrapping a 32-bit stamp, late SYNCs held out, a real step taken).
+ * The same scheme as the weapon firmware's timesync suite.
  */
 #include <math.h>
 #include <stdlib.h>
@@ -75,6 +76,82 @@ ZTEST(timesync, test_wrap_restart_and_bound)
 	/* Before any SYNC the inverse is the identity too. */
 	at_ts_init(&ts);
 	zassert_equal(at_ts_local(&ts, 77), 77);
+}
+
+/* SYNC number i of a clean stream (tracker clock 40 ppm fast), received late_us late, lane time shifted by step_us. */
+static void sync_i(at_timesync *ts, int i, int64_t late_us, int64_t step_us)
+{
+	int64_t lane = 50000000 + ((int64_t)i * 10000);
+	int64_t local = 123456789 + llround((double)(lane - 50000000) * 1.00004);
+
+	at_ts_add(ts, local + late_us, (uint32_t)(lane + step_us));
+}
+
+/* Lane-time error (us) of the estimate at the instant of SYNC number i, against the true lane time. */
+static int64_t lane_err(const at_timesync *ts, int i, int64_t step_us)
+{
+	int64_t lane = 50000000 + ((int64_t)i * 10000);
+	int64_t local = 123456789 + llround((double)(lane - 50000000) * 1.00004);
+
+	return at_ts_lane(ts, local) - (lane + step_us);
+}
+
+/* One SYNC stamped 3 ms late (the receiver was busy): held out, the fit is not pulled. */
+ZTEST(timesync, test_late_sync_rejected)
+{
+	at_timesync ts;
+
+	at_ts_init(&ts);
+	for (int i = 0; i < 40; i++) {
+		sync_i(&ts, i, 0, 0);
+	}
+	sync_i(&ts, 40, 3000, 0);
+	zassert_equal(ts.rejected, 1U);
+	zassert_equal(ts.resets, 0U);
+	zassert_true(llabs(lane_err(&ts, 41, 0)) <= 2, "%lld", (long long)lane_err(&ts, 41, 0));
+	for (int i = 41; i < 50; i++) {
+		sync_i(&ts, i, 0, 0);
+	}
+	zassert_equal(ts.rejected, 1U, "clean SYNCs after it are taken");
+	zassert_equal(ts.n_pend, 0U);
+	zassert_true(llabs(lane_err(&ts, 50, 0)) <= 2);
+
+	/* Late SYNCs in a row that disagree with each other (1-9 ms): still outliers, not a step. */
+	sync_i(&ts, 50, 1000, 0);
+	sync_i(&ts, 51, 3000, 0);
+	sync_i(&ts, 52, 6000, 0);
+	sync_i(&ts, 53, 9000, 0);
+	sync_i(&ts, 54, 12000, 0);
+	zassert_equal(ts.resets, 0U);
+	zassert_equal(ts.rejected, 6U);
+	zassert_true(llabs(lane_err(&ts, 55, 0)) <= 2);
+}
+
+/* The lane time steps by 2 ms and stays there: taken after AT_TS_STEP_N SYNCs in a row agree. */
+ZTEST(timesync, test_step_accepted_after_n)
+{
+	at_timesync ts;
+
+	at_ts_init(&ts);
+	for (int i = 0; i < 40; i++) {
+		sync_i(&ts, i, 0, 0);
+	}
+	for (int i = 40; i < (40 + (int)AT_TS_STEP_N - 1); i++) {
+		sync_i(&ts, i, 0, 2000);
+		zassert_equal(ts.resets, 0U, "SYNC %d after the step: held out", i - 39);
+		zassert_true(llabs(lane_err(&ts, i, 0)) <= 2, "still the old lane time");
+	}
+	sync_i(&ts, 40 + (int)AT_TS_STEP_N - 1, 0, 2000);
+	zassert_equal(ts.resets, 1U, "step taken");
+	zassert_equal(ts.rejected, AT_TS_STEP_N);
+	int i_next = 40 + (int)AT_TS_STEP_N;
+
+	zassert_true(llabs(lane_err(&ts, i_next, 2000)) <= 2, "%lld", (long long)lane_err(&ts, i_next, 2000));
+	for (int i = i_next; i < (i_next + 10); i++) {
+		sync_i(&ts, i, 0, 2000);
+	}
+	zassert_equal(ts.resets, 1U);
+	zassert_equal(ts.rejected, AT_TS_STEP_N);
 }
 
 ZTEST(timesync, test_unwrap_near)

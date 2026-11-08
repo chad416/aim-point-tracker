@@ -126,7 +126,7 @@ def plot_trace() -> None:
     ax.set_ylabel("aim point relative to the hit, mm")
     det = r["detail"]
     ax.set_title(f"IT04: after-action record, shot {r['shot_no']}: aim trace (50 Hz), the flinch before the "
-                 f"break;\nS1 detail merged: take-up {det['takeup_ms']} ms, squeeze {det['squeeze_ms']} ms",
+                 f"break;\nthe weapon's trigger data merged: take-up {det['takeup_ms']} ms, squeeze {det['squeeze_ms']} ms",
                  fontsize=9.5)
     ax.legend(loc="lower left")
     fig.tight_layout()

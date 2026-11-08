@@ -44,7 +44,9 @@
   "ambiguous": 60,
   "unknown_node": 0,
   "reacquired": 2,
-  "confirmed": 4
+  "confirmed": 4,
+  "shots_lost": 0,
+  "untracked_shots": 0
  },
  "failures": []
 }

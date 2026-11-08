@@ -8,7 +8,7 @@ session's targets) and draws, at any moment of the session:
     number (from HIT and AIM frames, decoded with protocol/tracker.dbc);
   - the after-action panel of the latest shot: the aim trace from 1.0 s
     before the break to 0.5 s after it, and the weapon's trigger data
-    (S1's SHOT_DETAIL) merged into the record by the tracker.
+    (its SHOT_DETAIL) merged into the record by the tracker.
 
 Usage:
   lane_view.py SESSION_DIR --png out.png [--at SECONDS]      one picture

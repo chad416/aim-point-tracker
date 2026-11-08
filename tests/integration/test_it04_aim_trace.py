@@ -5,7 +5,7 @@ break: the muzzle dips 25 mm in the last 80 ms and recovers. 12 shots.
   F07  an AIM frame for (nearly) every aim pulse, at the weapon's slot rate,
        on the true aim point
   F12  one record per shot: aim trace from 1.0 s before the break to 0.5 s
-       after, the hit, and S1's SHOT_DETAIL merged by shot number; the flinch
+       after, the hit, and the weapon's SHOT_DETAIL merged by shot number; the flinch
        is visible in the trace
   F11  TRK_STATUS at 1 Hz
 """
@@ -21,6 +21,7 @@ import scenario as SC
 T0 = 1000.0
 BREAKS = [T0 + 1.2 + 0.7 * i for i in range(12)]
 FLINCH_MM, FLINCH_S, RECOVER_S = 25.0, 0.08, 0.15
+FAULT_SLOW = 0x10  # aimtrk/proto.h AT_FAULT_SLOW
 
 
 def hold(t: float) -> tuple[float, float]:
@@ -95,4 +96,6 @@ def test_aim_trace_and_record(lib, cam, calibration, tmp_path):
     assert min(trace_pts) >= 65
     assert res["trace_error_mm_rms"] <= 2.0
     assert res["flinch_seen_mm"]["min"] >= 10.0, "the flinch shows in every trace"
-    assert 8 <= len(st) <= 11 and all(s["faults"] == 0 for s in st)
+    # No faults. SLOW (a frame over 3 ms of CPU time) is left out here: on a virtual machine the host
+    # slows a frame now and then (SPEC 9.4). P05 is IT09's check, not this one's.
+    assert 8 <= len(st) <= 11 and all(s["faults"] & ~FAULT_SLOW == 0 for s in st)

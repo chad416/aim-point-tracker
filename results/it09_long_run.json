@@ -16,9 +16,9 @@
  "aim_frames": 96798,
  "stray_spots_per_1000_frames": 20.58,
  "proc_ms": {
-  "mean": 1.047,
-  "max": 13.435,
-  "wall_max": 12.317
+  "mean": 1.168,
+  "max": 13.668,
+  "wall_max": 12.529
  },
  "heap_bytes": {
   "after_first_frame": 10800,
@@ -26,7 +26,7 @@
  },
  "frame_time_residual_max_us": 44,
  "status_frames": 1000,
- "status_worst_ms_max": 13.4,
+ "status_worst_ms_max": 13.700000000000001,
  "misses": [
   {
    "node": 2,
@@ -37,15 +37,23 @@
   }
  ],
  "proc_ms_percentiles": {
-  "50": 1.006,
-  "99": 1.771,
-  "99.9": 2.413,
-  "99.99": 3.921
+  "50": 1.069,
+  "99": 2.095,
+  "99.9": 2.9,
+  "99.99": 4.357
  },
+ "wall_ms_percentiles": {
+  "50": 0.98,
+  "99": 1.922,
+  "99.9": 2.659,
+  "99.99": 3.998
+ },
+ "hit_tolerance_mm": 5.0,
  "slowest_frames": [
   {
-   "k": 185837,
-   "proc_ms": 13.435,
+   "k": 181898,
+   "proc_ms": 13.668,
+   "wall_ms": 12.529,
    "spots": 1,
    "rejected": [
     119,
@@ -55,8 +63,21 @@
    ]
   },
   {
-   "k": 185728,
-   "proc_ms": 5.936,
+   "k": 190981,
+   "proc_ms": 9.459,
+   "wall_ms": 8.671,
+   "spots": 1,
+   "rejected": [
+    119,
+    1,
+    0,
+    3
+   ]
+  },
+  {
+   "k": 178960,
+   "proc_ms": 7.912,
+   "wall_ms": 7.253,
    "spots": 1,
    "rejected": [
     120,
@@ -66,30 +87,21 @@
    ]
   },
   {
-   "k": 185807,
-   "proc_ms": 5.472,
+   "k": 191043,
+   "proc_ms": 7.194,
+   "wall_ms": 6.595,
    "spots": 1,
    "rejected": [
-    130,
+    121,
     1,
     0,
     3
    ]
   },
   {
-   "k": 121577,
-   "proc_ms": 5.465,
-   "spots": 1,
-   "rejected": [
-    119,
-    1,
-    0,
-    3
-   ]
-  },
-  {
-   "k": 121570,
-   "proc_ms": 5.2,
+   "k": 191112,
+   "proc_ms": 5.749,
+   "wall_ms": 5.27,
    "spots": 1,
    "rejected": [
     119,
@@ -99,8 +111,9 @@
    ]
   },
   {
-   "k": 185722,
-   "proc_ms": 4.994,
+   "k": 101586,
+   "proc_ms": 5.441,
+   "wall_ms": 4.988,
    "spots": 1,
    "rejected": [
     119,
@@ -110,19 +123,21 @@
    ]
   },
   {
-   "k": 149006,
-   "proc_ms": 4.647,
+   "k": 168055,
+   "proc_ms": 5.001,
+   "wall_ms": 4.585,
    "spots": 1,
    "rejected": [
-    119,
+    121,
     1,
     0,
     3
    ]
   },
   {
-   "k": 170632,
-   "proc_ms": 4.298,
+   "k": 181722,
+   "proc_ms": 4.921,
+   "wall_ms": 4.512,
    "spots": 1,
    "rejected": [
     119,
@@ -132,11 +147,67 @@
    ]
   }
  ],
+ "slowest_frames_by_wall": [
+  {
+   "k": 181898,
+   "proc_ms": 13.668,
+   "wall_ms": 12.529,
+   "spots": 1
+  },
+  {
+   "k": 190981,
+   "proc_ms": 9.459,
+   "wall_ms": 8.671,
+   "spots": 1
+  },
+  {
+   "k": 178960,
+   "proc_ms": 7.912,
+   "wall_ms": 7.253,
+   "spots": 1
+  },
+  {
+   "k": 191043,
+   "proc_ms": 7.194,
+   "wall_ms": 6.595,
+   "spots": 1
+  },
+  {
+   "k": 191112,
+   "proc_ms": 5.749,
+   "wall_ms": 5.27,
+   "spots": 1
+  },
+  {
+   "k": 101586,
+   "proc_ms": 5.441,
+   "wall_ms": 4.988,
+   "spots": 1
+  },
+  {
+   "k": 168055,
+   "proc_ms": 5.001,
+   "wall_ms": 4.585,
+   "spots": 1
+  },
+  {
+   "k": 181722,
+   "proc_ms": 4.921,
+   "wall_ms": 4.512,
+   "spots": 1
+  }
+ ],
  "typical_frame_rejected_mean": [
-  122.5,
+  122.4,
   1.0,
   0.2,
   3.0
  ],
- "reacquired": 0
+ "reacquired": 0,
+ "untracked_shots": 39,
+ "sync": {
+  "received": 100040,
+  "rejected": 0,
+  "resets": 0
+ }
 }

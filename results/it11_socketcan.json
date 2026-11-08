@@ -1,0 +1,29 @@
+{
+ "driver_late_us_max": 5919,
+ "hits_on_bus": [
+  {
+   "shot_no": 1,
+   "x_mm": 120.0,
+   "y_mm": -80.0,
+   "result": 0,
+   "quality": 161,
+   "latency": 9.5
+  }
+ ],
+ "status_on_bus": 2,
+ "aims_logged": 77,
+ "summary": {
+  "frames": 160,
+  "camera_dropped": 0,
+  "frame_time_residual_max_us": 22,
+  "drift_ppm": -6.0,
+  "sync": {
+   "received": 205,
+   "rejected": 0,
+   "resets": 0
+  },
+  "can_tx_dropped": 0,
+  "can_user_stamps": 0,
+  "can_rx_delay_max_us": 1644
+ }
+}

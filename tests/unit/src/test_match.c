@@ -456,3 +456,81 @@ ZTEST(match, test_reacquire)
 	zassert_equal(m.stats.reacquired, 1U);
 	zassert_equal(aims, 1, "after three misses: a candidate at frame 12, confirmed with an AIM at 14");
 }
+
+/*
+ * A shot of a weapon with neither a track nor a candidate (its aim pulses were not seen): only a new,
+ * unexplained spot can be its flash. Before, any spot of at least min_init_snr was taken (the strongest).
+ */
+ZTEST(match, test_untracked_shot)
+{
+	setup(1);
+	at_mspot glint = spot(500.0F, 300.0F); /* a stray in the other slot's frames, stronger than an emitter */
+
+	glint.snr = 300.0F;
+	for (int64_t k = 0; k < 5; k++) {
+		at_match_frame(&m, k, ((k % 2) == 1) ? &glint : NULL, ((k % 2) == 1) ? 1 : 0);
+		zassert_equal(settle(k), 0);
+	}
+	zassert_false(m.cand[0], "the weapon's own slot frames were empty");
+
+	/* Its flash is hidden; the stray was there two frames before: not taken. */
+	zassert_ok(at_match_shot(&m, 1, 1, break_for(5)));
+	at_match_frame(&m, 5, &glint, 1);
+	zassert_equal(settle(5), 1);
+	zassert_equal(ev[0].result, AT_HIT_NO_SPOT, "not the recurring stray");
+
+	/* Its flash is seen, next to the stray: the new spot is taken, not the stronger stray. */
+	at_match_frame(&m, 6, NULL, 0);
+	(void)settle(6);
+	zassert_ok(at_match_shot(&m, 1, 2, break_for(7)));
+	at_mspot two[2] = {glint, spot(-200.0F, 0.0F)};
+
+	at_match_frame(&m, 7, two, 2);
+	zassert_equal(settle(7), 1);
+	zassert_equal(ev[0].result, AT_HIT_OK);
+	zassert_within(ev[0].x_mm, -200.0F, 1e-4F);
+	zassert_equal(m.stats.untracked_shots, 2U);
+
+	/* Two new spots and no track to choose by: AMBIGUOUS, not a guess. */
+	setup(1);
+	for (int64_t k = 0; k < 3; k++) {
+		at_match_frame(&m, k, NULL, 0);
+		(void)settle(k);
+	}
+	zassert_ok(at_match_shot(&m, 1, 3, break_for(3)));
+	at_mspot pair[2] = {spot(300.0F, 0.0F), spot(-300.0F, 0.0F)};
+
+	at_match_frame(&m, 3, pair, 2);
+	zassert_equal(settle(3), 1);
+	zassert_equal(ev[0].result, AT_HIT_AMBIGUOUS);
+	zassert_equal(m.stats.ambiguous, 1U);
+
+	/* The same rule for a SHOT_EVENT that arrives after its frame was settled. */
+	at_match_frame(&m, 4, NULL, 0);
+	(void)settle(4);
+	at_match_frame(&m, 5, &glint, 1);
+	(void)settle(5);
+	at_match_frame(&m, 6, NULL, 0);
+	(void)settle(6);
+	at_match_frame(&m, 7, &glint, 1);
+	(void)settle(7);
+	zassert_ok(at_match_shot(&m, 1, 4, break_for(7)));
+	at_match_frame(&m, 8, NULL, 0);
+	zassert_equal(settle(8), 1);
+	zassert_equal(ev[0].result, AT_HIT_NO_SPOT, "late, and the stray recurs");
+	zassert_equal(m.stats.late_shots, 1U);
+}
+
+/* A full pending-shot table loses the shot: counted, so the host can report it. */
+ZTEST(match, test_shot_table_full_counted)
+{
+	setup(1);
+	for (int i = 0; i < AT_MATCH_SHOTS; i++) {
+		zassert_ok(at_match_shot(&m, 1, (uint16_t)i, break_for(1000 + i)));
+	}
+	zassert_equal(at_match_shot(&m, 1, 99, break_for(2000)), -1);
+	zassert_equal(m.stats.shots_lost, 1U);
+	zassert_equal(at_match_shot(&m, 9, 1, break_for(2000)), -1);
+	zassert_equal(m.stats.shots_lost, 1U, "an unknown node is counted apart");
+	zassert_equal(m.stats.unknown_node, 1U);
+}

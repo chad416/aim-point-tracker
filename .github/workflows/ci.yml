@@ -35,7 +35,7 @@ jobs:
         run: |
           python3 -m venv "$AIMTRK_VENV"
           "$AIMTRK_VENV/bin/pip" install -q --upgrade pip
-          "$AIMTRK_VENV/bin/pip" install -q west numpy scipy matplotlib ruff pytest cantools opencv-python-headless==5.0.0.93
+          "$AIMTRK_VENV/bin/pip" install -q west -r aimtrk-fw/requirements.txt
 
       - name: Cache Zephyr and SDK
         uses: actions/cache@v4
@@ -95,8 +95,18 @@ jobs:
           assert cov >= 0.90, "below the 90 % target"
           EOF
 
-      - name: "Integration tests IT01-IT08, IT10 (S1 replay) on rendered sequences (SPEC 9.3)"
-        run: bash aimtrk-fw/scripts/test-it.sh
+      # IT11 runs aim_host live on SocketCAN. It needs the vcan module, which hosted runners may not
+      # have: then this step says so and IT11 is skipped, not failed.
+      - name: "Virtual CAN interface vcan0 for IT11 (if the runner's kernel has vcan)"
+        run: |
+          if sudo modprobe vcan 2>/dev/null || { sudo apt-get install -y -qq "linux-modules-extra-$(uname -r)" >/dev/null 2>&1 && sudo modprobe vcan; }; then
+            sudo ip link add dev vcan0 type vcan && sudo ip link set up vcan0 && ip -details link show vcan0
+          else
+            echo "::notice::no vcan module on this runner: IT11 (SocketCAN) will be skipped"
+          fi
+
+      - name: "Integration tests IT01-IT08, IT10 (weapon firmware replay), IT11 (vcan) on rendered sequences (SPEC 9.3)"
+        run: bash aimtrk-fw/scripts/test-it.sh -rs
 
       - name: "IT09: 100 000 frames, P03 and P05 (weekly and on demand)"
         if: github.event_name == 'schedule' || github.event_name == 'workflow_dispatch'

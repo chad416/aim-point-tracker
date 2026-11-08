@@ -8,11 +8,11 @@ what aim_host sees:
   frames.bin   camera frames (region renderer, below), stamped on the
                tracker's own clock (Clock: offset and drift against lane time)
   can_in.log   the lane's CAN traffic as the tracker receives it: SYNC every
-               10 ms (with reception jitter), and per shot S1's SHOT_EVENT and
+               10 ms (with reception jitter), and per shot the weapon's SHOT_EVENT and
                SHOT_DETAIL; candump -L format
   truth.json   every emitter pulse and every shot, with true screen positions
 
-The weapons follow S1 v0.6 (SPEC §6.5): an aim pulse in the middle of each
+The weapons follow the weapon firmware v0.6 (SPEC §6.5): an aim pulse in the middle of each
 exposure of the weapon's slot; at a break, the shot pulse in the first
 exposure whose pulse starts at least 2 ms later, replacing the weapon's aim
 pulse in that frame. Each pulse is placed on the weapon's own estimate of lane
@@ -210,7 +210,7 @@ class Scenario:
     drop_k: set[int] = dataclasses.field(default_factory=set)  # exposures the camera loses
     sync_jitter_us: float = 20.0  # SYNC reception delay (one-sided)
     camera_jitter_us: float = 5.0  # frame timestamp jitter
-    shot_event_delay_us: int = 1200  # break -> SHOT_EVENT received (S1 T03: <= 2 ms)
+    shot_event_delay_us: int = 1200  # break -> SHOT_EVENT received (firmware T03: <= 2 ms)
     clock: Clock = dataclasses.field(default_factory=Clock)
     interference: Interference | None = None
     seed: int = 1

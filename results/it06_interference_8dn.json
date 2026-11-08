@@ -16,8 +16,8 @@
   "elongated": 2500
  },
  "proc_ms": {
-  "mean": 1.08,
-  "max": 1.977,
-  "wall_max": 1.812
+  "mean": 1.096,
+  "max": 2.303,
+  "wall_max": 2.118
  }
 }

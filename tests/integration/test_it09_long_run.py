@@ -4,15 +4,18 @@ each, with the interference set at the typical projector leak (12 DN), a
 sunlit window, glints, extra hot pixels and a person crossing the view.
 
   P03  >= 99.9 % of the visible shots give a HIT with a position on the true
-       spot (within 20 mm; the accuracy itself is P01's, reported here as the
-       RMS of these hits); a false HIT is a position more than 20 mm from the
-       true spot, or a position for a shot nobody could see: <= 1 in the
+       spot: within HIT_TOL_MM = 5 mm, P01's limit at the 99th percentile
+       (the accuracy itself is P01's, reported here as the RMS of these
+       hits); a false HIT is a position further than that from the true
+       spot, or a position for a shot nobody could see: <= 1 in the
        100 000 frames. AMBIGUOUS HITs are counted apart (P04).
-  P05  processing <= 3 ms per frame (thread CPU time); no heap growth after
-       start-up. Checked on the 99.9th percentile: on a virtual machine (WSL2,
-       CI runners) time the host takes the CPU away still counts as the
-       thread's CPU time, so the maximum is reported with the slowest frames
-       and what was in them, not asserted.
+  P05  processing <= 3 ms per frame, worst case; no heap growth after
+       start-up. Not shown here: on a virtual machine (WSL2, CI runners)
+       time the host takes the CPU away still counts as the thread's CPU
+       time, and the slowest frames by CPU time and by wall time are
+       different frames. So the 99.9th percentile of the CPU time is
+       asserted, and both clocks are reported with their maxima and the
+       slowest frames (what was in them). A worst case needs a target board.
 
 Slow (several minutes): excluded by default, run with  pytest -m long.
 """
@@ -30,6 +33,7 @@ import scenario as SC
 T0 = 1000.0
 DURATION_S = 1000.0  # 100 000 frames
 P05_MS = 3.0
+HIT_TOL_MM = 5.0  # P01: 5 mm at the 99th percentile
 
 
 def sweep(ax: float, ay: float, fx: float, fy: float, phase: float):
@@ -76,7 +80,7 @@ def test_long_run(lib, calibration, tmp_path):
             continue
         visible += 1
         d = math.hypot(h["x_mm"] - s["x_mm"], h["y_mm"] - s["y_mm"])
-        if h["result"] in (0, 2, 4) and d <= 20.0:
+        if h["result"] in (0, 2, 4) and d <= HIT_TOL_MM:
             ok += 1
             errors.append(d)
         else:
@@ -102,13 +106,20 @@ def test_long_run(lib, calibration, tmp_path):
     # host takes the CPU away still counts as this thread's CPU time).
     proc = np.array([f["proc_ms"] for f in out["frames"]])
     res["proc_ms_percentiles"] = {p: round(float(np.percentile(proc, p)), 3) for p in (50, 99, 99.9, 99.99)}
+    wall = np.array([f["wall_ms"] for f in out["frames"]])
+    res["wall_ms_percentiles"] = {p: round(float(np.percentile(wall, p)), 3) for p in (50, 99, 99.9, 99.99)}
+    res["hit_tolerance_mm"] = HIT_TOL_MM
     slow = sorted(out["frames"], key=lambda f: -f["proc_ms"])[:8]
-    res["slowest_frames"] = [{"k": f["k"], "proc_ms": f["proc_ms"], "spots": f["spots"], "rejected": f["rejected"]}
-                             for f in slow]
+    res["slowest_frames"] = [{"k": f["k"], "proc_ms": f["proc_ms"], "wall_ms": f["wall_ms"], "spots": f["spots"],
+                              "rejected": f["rejected"]} for f in slow]
+    res["slowest_frames_by_wall"] = [{"k": f["k"], "proc_ms": f["proc_ms"], "wall_ms": f["wall_ms"],
+                                      "spots": f["spots"]} for f in sorted(out["frames"], key=lambda f: -f["wall_ms"])[:8]]
     typical = [f for f in out["frames"] if f["proc_ms"] <= np.percentile(proc, 50)]
     res["typical_frame_rejected_mean"] = [round(float(np.mean([f["rejected"][i] for f in typical])), 1)
                                           for i in range(4)]
     res["reacquired"] = summ["match"]["reacquired"]
+    res["untracked_shots"] = summ["match"]["untracked_shots"]
+    res["sync"] = summ["sync"]
     LN.write_result("it09_long_run.json", res)
 
     assert summ["frames"] >= 99_900

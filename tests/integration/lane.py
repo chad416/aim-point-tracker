@@ -2,25 +2,23 @@
 C library, and a shot pipeline (render -> detect -> map to the screen).
 
 IT01, IT02 and IT08 drive the C library through ctypes on frames from the
-camera simulator; IT03-IT07 and IT09 run aim_host itself (tools/lane/runner.py).
+camera simulator; IT03-IT07, IT09-IT11 run aim_host itself (tools/lane/runner.py).
+The import paths (sim/, tools/...) come from pytest.ini.
 """
 from __future__ import annotations
 
 import json
 import math
 import pathlib
-import sys
 
+import aimtrk_c as AT
+import calibrate as CB  # noqa: F401  (used by the tests as lane.CB)
+import camsim
 import numpy as np
+from runner import HOST, build_host, decode, read_outputs, run_scenario  # noqa: F401  (lane.run_scenario ...)
 
 ROOT = pathlib.Path(__file__).resolve().parents[2]
 RESULTS = ROOT / "results"
-for p in ("sim", "tools/reference", "tools/calib", "tools/lane"):
-    sys.path.insert(0, str(ROOT / p))
-
-import aimtrk_c as AT  # noqa: E402
-import calibrate as CB  # noqa: E402, F401  (used by the tests as lane.CB)
-import camsim  # noqa: E402
 
 NOMINAL_PEAK_DN = 150.0   # the emitter design point (SPEC §6.2)
 SPOT_SIGMA_PX = 1.2
@@ -54,9 +52,6 @@ class Pipeline:
         s = near[0]
         x, y, status = AT.to_screen(self.lib, self.geom, s["x"], s["y"])
         return {"x_mm": x, "y_mm": y, "status": status, "u": s["x"], "v": s["y"], "snr": s["snr"]}, tr
-
-
-from runner import HOST, build_host, decode, read_outputs, run_scenario  # noqa: E402, F401  (lane.run_scenario ...)
 
 
 def write_result(name: str, data: dict) -> pathlib.Path:

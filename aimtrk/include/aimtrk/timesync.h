@@ -1,12 +1,18 @@
 /*
- * Lane time from SYNC (SPEC F06): the same scheme as the weapon firmware
- * (S1 F12, app/src/timesync). Each SYNC is timestamped with the tracker's own
- * clock on reception, and
+ * Lane time from SYNC (SPEC F06): the same scheme as the weapon firmware's
+ * timesync (trainer-weapon-firmware-twin, F12). Each SYNC is timestamped with
+ * the tracker's own clock on reception, and
  *     lane = ref_lane + slope * (local - ref_local)
  * is fitted by least squares over the last AT_TS_WINDOW points: offset and
- * drift. The 32-bit lane clock is unwrapped to 64 bits; a jump of more than
- * AT_TS_JUMP_US (lane restart) restarts the fit; the drift is bounded to
- * +-AT_TS_MAX_DRIFT so a bad SYNC stream cannot skew every timestamp.
+ * drift. The 32-bit lane clock is unwrapped to 64 bits, and the drift is
+ * bounded to +-AT_TS_MAX_DRIFT so a bad SYNC stream cannot skew every
+ * timestamp.
+ *
+ * Outliers: a SYNC whose lane time is more than AT_TS_GATE_US from the
+ * current fit is held out (a late reception stamp would otherwise pull the
+ * whole fit). Only when AT_TS_STEP_N SYNCs in a row disagree with the fit,
+ * and agree with each other to AT_TS_GATE_US, has the lane time really
+ * stepped (a lane restart, a long gap): the fit restarts on them.
  */
 #ifndef AIMTRK_TIMESYNC_H_
 #define AIMTRK_TIMESYNC_H_
@@ -15,8 +21,9 @@
 #include <stdint.h>
 
 #define AT_TS_WINDOW    32U
-#define AT_TS_JUMP_US   10000
 #define AT_TS_MAX_DRIFT 500e-6
+#define AT_TS_GATE_US   200 /* SYNC further than this from the fit: held out */
+#define AT_TS_STEP_N    4U  /* this many in a row, consistent with each other: a step, the fit restarts */
 
 typedef struct {
 	int64_t local[AT_TS_WINDOW];
@@ -28,7 +35,14 @@ typedef struct {
 	int64_t ref_local;
 	double ref_lane;
 	double slope;
-	uint32_t updates, resets;
+	/* SYNCs held out in a row (candidates for a step) */
+	int64_t pend_local[AT_TS_STEP_N];
+	int64_t pend_lane[AT_TS_STEP_N];
+	double pend_err[AT_TS_STEP_N];
+	uint8_t n_pend;
+	uint32_t updates;  /* SYNCs received */
+	uint32_t resets;   /* fit restarted on a step */
+	uint32_t rejected; /* SYNCs held out as outliers (those that later formed a step included) */
 } at_timesync;
 
 void at_ts_init(at_timesync *ts);
