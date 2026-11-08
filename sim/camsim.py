@@ -14,8 +14,10 @@ Coordinates
   image   x right, y down, px, pixel centres at integers (aimtrk/centroid.h)
 
 Frame stream: each frame is a 32-byte header (FRAME_HEADER) followed by
-width * height bytes, row-major. Ground truth goes to a JSON lines file, one
-line per spot.
+width * height bytes, row-major (host/frames.h): magic, width, height, the
+camera's frame counter, the exposure start on the tracker's own clock (us),
+the exposure length, flags. Ground truth goes to a JSON lines file, one line
+per spot.
 
 Usage:
   camsim.py lane                       reference lane check (SPEC §2a) -> results/lane_check.json
@@ -38,8 +40,8 @@ import numpy as np
 
 ROOT = pathlib.Path(__file__).resolve().parents[1]
 
-# magic, width, height, frame index, exposure start and end (lane time, us), flags
-FRAME_HEADER = struct.Struct("<4sHHIqqI")
+# magic, width, height, frame counter, exposure start (tracker clock, us), exposure (us), flags, reserved
+FRAME_HEADER = struct.Struct("<4sHHIqIII")
 FRAME_MAGIC = b"AIMF"
 
 FRAME_PERIOD_US = 10_000   # 100 fps, one frame per SYNC period (SPEC §2a)
@@ -175,8 +177,10 @@ class Camera:
         j = self.lane.jacobian(xy_mm)
         return (sigma_mm**2) * (j @ j.T) + (self.lens_sigma_px**2) * np.eye(2)
 
-    def add_spot(self, img: np.ndarray, spot: Spot, exposure: tuple[int, int]) -> dict:
-        """Add a spot's signal (DN, noise-free) to img. Returns its ground truth record."""
+    def add_spot(self, img: np.ndarray, spot: Spot, exposure: tuple[int, int],
+                 origin: tuple[int, int] = (0, 0)) -> dict:
+        """Add a spot's signal (DN, noise-free) to img, whose pixel (0, 0) is image pixel
+        origin = (row, col) (a patch). Returns its ground truth record."""
         t0, t1 = exposure
         ps, pe = spot.t_us if spot.t_us is not None else (t0, t1)
         o0, o1 = max(ps, t0), min(pe, t1)
@@ -198,7 +202,8 @@ class Camera:
             return rec
         n_sub = max(1, int(math.ceil(np.linalg.norm(uv_b - uv_a) * 4)))
         centres = [uv_a + (uv_b - uv_a) * ((i + 0.5) / n_sub) for i in range(n_sub)] if n_sub > 1 else [uv]
-        render_gaussian(img, centres, cov, spot.total_dn * frac)
+        shift = np.array([origin[1], origin[0]], dtype=float)
+        render_gaussian(img, [c - shift for c in centres], cov, spot.total_dn * frac)
         return rec
 
     def render(self, spots: list[Spot], k: int, rng: np.random.Generator) -> tuple[np.ndarray, list[dict]]:
@@ -257,9 +262,11 @@ def render_gaussian(img: np.ndarray, centres, cov: np.ndarray, total: float, ss:
         img[ys[keep_y][0]:ys[keep_y][-1] + 1, xs[keep_x][0]:xs[keep_x][-1] + 1] += g.astype(img.dtype)
 
 
-def write_frame(f, img: np.ndarray, k: int, flags: int = 0) -> None:
-    t0, t1 = exposure_window(k)
-    f.write(FRAME_HEADER.pack(FRAME_MAGIC, img.shape[1], img.shape[0], k, t0, t1, flags))
+def write_frame(f, img: np.ndarray, index: int, t_local_us: int | None = None, flags: int = 0) -> None:
+    """One frame: counter `index`, exposure start t_local_us on the tracker's clock
+    (default: exposure `index` on the lane grid, tracker clock = lane time)."""
+    t0 = exposure_window(index)[0] if t_local_us is None else int(t_local_us)
+    f.write(FRAME_HEADER.pack(FRAME_MAGIC, img.shape[1], img.shape[0], index, t0, EXPOSURE_US, flags, 0))
     f.write(np.ascontiguousarray(img, dtype=np.uint8).tobytes())
 
 
@@ -267,11 +274,11 @@ def read_frames(path: pathlib.Path):
     """Yield (header dict, image) from a frame stream file."""
     with open(path, "rb") as f:
         while hdr := f.read(FRAME_HEADER.size):
-            magic, w, h, k, t0, t1, flags = FRAME_HEADER.unpack(hdr)
+            magic, w, h, index, t0, exposure, flags, _ = FRAME_HEADER.unpack(hdr)
             if magic != FRAME_MAGIC:
                 raise ValueError(f"bad frame magic {magic!r}")
             img = np.frombuffer(f.read(w * h), dtype=np.uint8).reshape(h, w)
-            yield {"frame": k, "t0_us": t0, "t1_us": t1, "flags": flags}, img
+            yield {"index": index, "t_local_us": t0, "exposure_us": exposure, "flags": flags}, img
 
 
 def random_spots(rng: np.random.Generator, lane: Lane, n: int, total_dn: float,

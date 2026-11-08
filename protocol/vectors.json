@@ -1,0 +1,13 @@
+{
+  "comment": "Sample messages for the C encoder/decoder test (tests/unit/src/test_proto.c). gen_vectors.py encodes them with tracker.dbc.",
+  "vectors": [
+    {"name": "HIT_OK", "message": "HIT_N1", "signals": {"shot_no": 1234, "x_mm": 812.25, "y_mm": -403.5, "result": 0, "quality": 87, "latency": 14.3}},
+    {"name": "HIT_NEG_EDGE", "message": "HIT_N1", "signals": {"shot_no": 65535, "x_mm": -2048, "y_mm": 2047.75, "result": 2, "quality": 255, "latency": 25.5}},
+    {"name": "HIT_DROPPED", "message": "HIT_N1", "signals": {"shot_no": 7, "x_mm": 0, "y_mm": 0, "result": 5, "quality": 0, "latency": 0.1}},
+    {"name": "AIM", "message": "AIM_N1", "signals": {"frame_seq": 40000, "x_mm": -1499.75, "y_mm": 844.5}},
+    {"name": "STATUS", "message": "TRK_STATUS", "signals": {"fps_x10": 99.9, "dropped": 3, "worst_ms": 1.9, "ambient": 16, "cal_age_h": 5, "faults": 36}},
+    {"name": "SYNC", "message": "SYNC", "signals": {"isotp_pci": 4, "lane_time_us": 4000000123}},
+    {"name": "SHOT_EVENT", "message": "SHOT_EVENT_N1", "signals": {"shot_no": 513, "t_us": 3000000007, "mode": 2, "chambered": 1, "rounds_left": 29}},
+    {"name": "SHOT_DETAIL", "message": "SHOT_DETAIL_N1", "signals": {"shot_no": 513, "takeup_ms": 120, "squeeze_ms": 1020, "jerk": 17, "muzzle_rate": 9, "cant": -12, "flinch": -1.3}}
+  ]
+}

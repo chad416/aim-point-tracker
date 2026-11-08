@@ -131,7 +131,9 @@ class DetectRef:
         sigma = noise_sigma(img, self.bg256)
         delta = max(float(c["k_sigma"]) * sigma, float(c["t_min"]))
         delta256 = math.floor(delta * 256.0 + 0.5)
-        thr = np.minimum((self.bg256 + delta256) >> 8, 255)
+        # Highest background of the cell and its 8 neighbours (sharp edges, SPEC 6.1).
+        hi = ndimage.maximum_filter(self.bg256, size=3, mode="constant", cval=0)
+        thr = np.minimum((hi + delta256) >> 8, 255)
         thr_px = np.repeat(np.repeat(thr, CELL, axis=0), CELL, axis=1)
         labels, n = ndimage.label(img > thr_px, structure=np.ones((3, 3), dtype=int))
         bgw_full = np.repeat(np.repeat((self.bg256 / 256.0).astype(np.float32), CELL, 0), CELL, 1)
@@ -170,10 +172,12 @@ class DetectRef:
             if xs.start == 0 or ys.start == 0 or xs.stop >= self.w or ys.stop >= self.h:
                 s["flags"] |= EDGE
             spots.append(s)
-        diff = self.cell_sums(img) * 16 - self.bg256
+        mean = self.cell_sums(img) * 16
+        diff = mean - self.bg256
         step = np.sign(diff) * (np.abs(diff) >> c["bg_shift"])  # truncation toward zero, as C
-        self.bg256 = np.where(freeze, self.bg256, self.bg256 + step)
+        snap = (np.abs(diff) > delta256 // 2) & ~freeze  # a scene change: take the new mean at once
+        self.bg256 = np.where(freeze, self.bg256, np.where(snap, mean, self.bg256 + step))
         self.stats = {"sigma": sigma, "blobs": int(n), "spots": len(spots), "rejected": rej,
-                      "frozen_cells": int(freeze.sum()), "learning": False,
+                      "frozen_cells": int(freeze.sum()), "snapped_cells": int(snap.sum()), "learning": False,
                       "bg_mean": float(self.bg256.mean() / 256.0)}
         return spots

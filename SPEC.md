@@ -1,6 +1,13 @@
 # S3 — Camera Aim-Point Tracker
 
-Specification, revision C (8 Nov 2026): week 2 done. Revision B (7 Nov) added the week 1 results (§2a, §3.3, §6.1, §6.2, §12) and the minimum of two time slots (§6.5). Revision C adds the week 2 results (§3.3, §6.3, §6.4, §9.3) and a separate `zero` module (§5).
+Specification, revision D (8 Nov 2026): week 3 done.
+
+- **Revision B** (7 Nov) added the week 1 results (§2a, §3.3, §6.1, §6.2, §12) and the minimum of two time slots (§6.5).
+- **Revision C** (8 Nov) added the week 2 results (§3.3, §6.3, §6.4, §9.3) and a separate `zero` module (§5).
+- **Revision D** (8 Nov) adds the week 3 results (§6.1, §6.5, §7, §8, §9.3, §12) and three changes found while testing:
+  - the break-to-shot-pulse margin is 2 ms, not 0.5 ms (§6.5);
+  - the shot pulse no longer skips the next aim pulse (§6.5);
+  - the background now copes with sharp scene changes (§6.1).
 
 Camera-based hit and aim tracking for a small-arms training lane. Each trainer weapon has an infrared emitter at the muzzle. An IR camera watches the projection screen, finds the emitter's spot in every frame and maps it to screen coordinates. It then tells the lane which weapon hit where:
 - a **hit** for every shot, matched to the weapon's SHOT_EVENT by lane time;
@@ -118,8 +125,8 @@ Week 2 measured the rest:
 
 | Source | Budget | Measured |
 |---|---|---|
-| Calibration residual | 0.3 px (0.75 mm) | 0.023 px fit, 0.023 px held-out (IT01); the mapping is within 0.04 mm of the true camera over the whole screen |
-| Hit accuracy, everything together (P01) | ≤ 2 mm RMS, ≤ 5 mm at the 99th percentile | 0.039 mm RMS and 0.082 mm at the 99th percentile over 500 shots (IT02) |
+| Calibration residual | 0.3 px (0.75 mm) | 0.023 px fit, 0.023 px held-out (IT01); the mapping is within 0.055 mm of the true camera over the whole screen |
+| Hit accuracy, everything together (P01) | ≤ 2 mm RMS, ≤ 5 mm at the 99th percentile | 0.042 mm RMS and 0.082 mm at the 99th percentile over 500 shots (IT02, re-run in week 3) |
 
 The simulated system meets P01 by a factor of 50. That margin shows what the simulation leaves out, not a reason to tighten P01:
 - The simulator's lens follows the same Brown–Conrady model the calibration fits. Only the focal length and principal point differ from the nominal values, so the fit can match it almost exactly. A real lens has terms the model does not hold.
@@ -172,7 +179,8 @@ Design choices:
 | `match` | SHOT_EVENT → frame, spot assignment (slot, gate, nearest predicted position; optimal assignment for ≤ 4 weapons), HIT and no-hit reasons |
 | `zero` | Zeroing offset per weapon: mean hit − target over N shots, refused if too few shots or the group is too scattered; the old offset stays until a new one succeeds (week 2: separate from `match`, so IT08 could run before `match` exists) |
 | `linalg` | Linear solve and symmetric eigenproblem (Jacobi) for the rim fit, the DLT and the calibration |
-| `timesync` | SYNC → offset and drift (shared design with S1) |
+| `timesync` | SYNC → offset and drift (shared design with S1), its inverse, and unwrapping of 32-bit lane stamps |
+| `proto` | HIT, AIM, TRK_STATUS encoders; SYNC, SHOT_EVENT, SHOT_DETAIL decoders (§7) |
 
 Python reference (`tools/reference/`): the same steps in NumPy, plus OpenCV's `findHomography` and `calibrateCamera` as independent checks for `geom` and `calib`.
 
@@ -195,6 +203,17 @@ Python reference (`tools/reference/`): the same steps in NumPy, plus OpenCV's `f
 - Memory for 1280 × 800 is 475 kB, fixed at start-up.
 - On 40 simulated frames, the C code agrees with an independent NumPy/SciPy version (`scipy.ndimage.label` for the blobs) to 2e-4 px.
 - It takes 1.1 ms per frame on average and 1.9 ms at worst on the development PC (WSL2), against the 3 ms of P05.
+
+**Week 3 changes** (found by IT06, the interference set; C and NumPy changed together, cross-check still 0 mismatches):
+- **A person walking through the view left thousands of false spots.** Diagnostic: 4083 spots in 299 frames with only the passer-by.
+  - Behind the person, the background still held their dark shape for many frames, so the ambient light coming back showed up as spots.
+  - Fix: a cell whose mean moves by more than half the detection threshold takes the new value at once, instead of 1/16 per frame. Cells under a spot stay frozen.
+- **Sharp edges made noise spots.** A 4 × 4 cell across a sharp edge (the person's outline, a window frame) averages its bright and dark halves. Against that mean, the noise of the bright half crossed the threshold as 3-pixel spots.
+  - Fix: each cell's threshold uses the highest background of the cell and its 8 neighbours. On a flat background that adds about 0.3 DN.
+  - It is computed as two passes of 3 values (row, then column): the first version, 9 comparisons per cell, took processing over 3 ms.
+- **Result:**
+  - 33 false spots in the same 299 frames, all where the person leaves the image.
+  - The week 1 figures are unchanged at the precision quoted (0.018 px at the nominal spot, every spot found from 16 DN up).
 
 ### 6.2 Centroid
 - Weighted centroid over the blob's pixels plus a one-pixel border, weights = frame − background, clipped at 0.
@@ -252,9 +271,24 @@ Python reference (`tools/reference/`): the same steps in NumPy, plus OpenCV's `f
 ### 6.5 Strobing on lane time (S1 v0.6)
 A 0.5 ms emitter pulse fired at a random moment overlaps a 1 ms exposure only 15 % of the time at 100 fps, and lies fully inside it 5 % of the time. So the weapon schedules its pulses into the exposure windows, which it knows from lane time (S1 F12):
 - **Aim pulses:** weapon slot s pulses in the middle of exposure k when `k mod N_slots = s`. With 2 weapons each has a 50 Hz aim trace; with 4, 25 Hz.
-- **Shot pulse:** at the trigger break the weapon pulses in the middle of the **next** exposure, whatever its slot, and skips its next aim pulse. That adds at most one frame (10 ms) to the optical latency; the recoil valve still fires at once (S1 T02 unchanged).
-- **Who fired:** the SHOT_EVENT carries the break time t. The shot frame is the first exposure starting after t + the firmware's scheduling margin. In that frame the shooter's spot is the one nearest the shooter's predicted aim position; another weapon's aim strobe in the same frame belongs to that weapon's slot and is near that weapon's track.
+- **Shot pulse:** at the trigger break the weapon pulses in the middle of the first exposure whose pulse starts at least **2 ms** after the break, whatever its slot.
+  - The shot pulse replaces the weapon's aim pulse in that frame only; its aim pulses carry on, so the follow-through after the shot is traced (F12).
+  - That adds at most 12 ms to the optical latency. The recoil valve still fires at once (S1 T02 unchanged).
+  - **Week 3 changes from revision C:**
+    - The margin was 0.5 ms. The weapon firmware only sees a break up to 1 ms after it happens and fires within 1.5 ms (S1 T01), so it would have missed its own frame.
+    - The pulse also no longer skips the next aim pulse, which had no purpose once a weapon flashes at most once per frame.
+  - Both sides use the same rule: `at_match_shot_frame` (aimtrk) and `strobe_shot_frame` (S1 v0.6).
+- **Who fired:** the SHOT_EVENT carries the break time t on the weapon's lane time. The shot frame is the first exposure whose pulse starts at least 2 ms after t. In that frame the shooter's spot is the one nearest the shooter's predicted aim position; another weapon's aim strobe in the same frame belongs to that weapon's slot and is near that weapon's track.
 - **Two shots in one frame:** both shooters are known from their SHOT_EVENTs; the two spots are assigned by distance to the two predicted positions. If the predictions are closer than the gate allows, the HITs are sent as AMBIGUOUS (P04 counts these).
+
+**Week 3 implementation** (`aimtrk/src/match.c`):
+- **Settling.** A frame is settled 5 ms after its exposure ends, once its SHOT_EVENTs have arrived (S1 sends them within 2 ms of the break).
+  - A frame not yet processed is waited for, until a newer frame arrives (frames come in order, so it was dropped) or 30 ms have passed.
+  - A SHOT_EVENT that arrives after its frame was settled is matched against the stored frame (the last 32 frames are kept).
+- **Assignment** is exhaustive over at most 8 emitters and 8 spots.
+  - A spot further than 150 mm from a weapon's prediction is not that weapon's.
+  - An assignment is ambiguous when swapping two emitters' spots costs less than 20 mm more than the best assignment.
+- **Results:** every SHOT_EVENT gives a HIT, with a reason when there is no usable position. Every aim pulse with a spot gives an AIM. Positions are corrected by the weapon's zeroing; the tracks run on the raw positions.
 - Timing margin: the pulse sits in the middle of the exposure, so the weapon's lane-time estimate may be off by ±250 µs before the pulse leaves the exposure. S1's time sync must stay inside ±100 µs (P07, and a test on the S1 side).
 - **At least two slots** (week 1): the background is not updated under a spot (§6.1). If a weapon flashed in every frame, the background at a steady aim point would never be updated, and it would go wrong there when the projected scene changes. So N_slots ≥ 2 even with one weapon: a single weapon flashes in every other frame, and the frames in between update the background under its aim point (unit test `detect.test_background_tracks_and_freezes`).
 
@@ -262,6 +296,7 @@ A 0.5 ms emitter pulse fired at a random moment overlaps a 1 ms exposure only 15
 - α-β filter per weapon on screen coordinates, updated in that weapon's slots.
 - A track is lost after 0.5 s without a spot (weapon lowered or off-screen) and restarts on the next spot in its slot.
 - Prediction gives the expected position at any lane time, for gating and assignment.
+- Week 3 values (`aimtrk/src/track.c`): α = 0.7, β = 0.3; a spot more than the gate (150 mm) from the prediction is not taken. So a weapon that swings more than about 150 mm between its slot frames (more than 7.5 m/s on the screen with two slots) loses its track for 0.5 s.
 
 ---
 
@@ -271,11 +306,15 @@ Same bus, ID layout `function (4 bits) | node ID (7 bits)`. S1 uses functions 0x
 
 | Frame | Function | Dir | Rate | Signals |
 |---|---|---|---|---|
-| HIT | 0xA | tracker → lane | per SHOT_EVENT | node ID of the shooter (in the ID), shot_no (u16), x_mm (i16), y_mm (i16), result (OK, NO_SPOT, OFF_SCREEN, AMBIGUOUS, SATURATED, DROPPED), quality (u8), latency 0.1 ms (u8, saturating) |
-| AIM | 0xB | tracker → lane | per slot frame | node ID (in the ID), x_mm (i16), y_mm (i16), frame_seq (u16) |
+| HIT | 0xA | tracker → lane | per SHOT_EVENT | node ID of the shooter (in the ID), shot_no (u16), x_mm and y_mm (14 bits each, 0.25 mm steps, ±2048 mm), result (4 bits: OK, NO_SPOT, OFF_SCREEN, AMBIGUOUS, SATURATED, DROPPED), quality (u8, the peak SNR), latency (u8, 0.1 ms, saturating) |
+| AIM | 0xB | tracker → lane | per slot frame | node ID (in the ID), frame_seq (u16, exposure number mod 65536), x_mm and y_mm (14 bits, 0.25 mm); 6 bytes |
 | TRK_STATUS | 0xC | tracker → lane | 1 Hz | fps ×10 (u16), dropped (u8), worst processing 0.1 ms (u8), ambient (u8), calibration age h (u8), faults (u8) |
 
-The tracker uses node ID 0x7E. Bus load with 2 weapons (S1's frames at 900 rpm plus 100 AIM/s, HIT per shot, TRK_STATUS) is about 310 frames/s, under 10 % of 500 kbit/s; week 3 measures it. As in S1, a unit test encodes every frame in C and decodes it with `cantools`.
+The tracker uses node ID 0x7E. As in S1, a unit test checks every frame against `protocol/tracker.dbc`: bytes generated with `cantools` from `protocol/vectors.json`, and `gen_vectors.py --check` in CI.
+
+**Week 3:**
+- **Positions** are 14-bit with 0.25 mm steps, not 16-bit whole millimetres. A whole millimetre would throw away most of the measured accuracy (0.04 mm), and 14 bits leave room for the result field in 8 bytes.
+- **Bus load** (IT05): 311 frames/s and 7.6 % of 500 kbit/s in the worst case, counting standard frames with worst-case bit stuffing. The worst case is two weapons at 900 rpm (SHOT_EVENT and SHOT_DETAIL per shot, STATUS at 10 Hz each), SYNC at 100 Hz, a HIT per shot, AIM at 100 Hz and TRK_STATUS at 1 Hz. The tracker's own frames in IT05 were 2.5 %.
 
 ---
 
@@ -291,6 +330,24 @@ Renders 1280 × 800 8-bit frames, streamed into a pipe with a small header (fram
 - **Interference set** (P03): projector leak at three levels, a reflective target frame, a sunlit window, hot pixels, a passer-by blocking part of the view.
 
 Rendering cost is measured in week 1 (open point §11). If it is too slow for long runs, the simulator renders only a region around each spot over a cached background.
+
+**Week 3** (`sim/scenario.py`):
+- **Scenarios.** A scenario describes the weapons: slots, aim paths, breaks, misalignment, raised, covered, brightness. It is turned into what `aim_host` sees:
+  - camera frames stamped on the tracker's own clock (offset, +40 ppm drift, 5 µs timestamp jitter);
+  - the CAN traffic as the tracker receives it: SYNC every 10 ms with up to 20 µs reception delay, and S1's SHOT_EVENT and SHOT_DETAIL per shot;
+  - ground truth for every pulse.
+- **The weapons follow S1 v0.6.** They place pulses on their own lane-time estimate (20 µs error), and their shot frame comes from the same estimate they report in SHOT_EVENT.
+- **Region renderer.**
+  - 48 noisy background frames (with the interference) are rendered once. Each frame is one of them, with the spots rendered over it in 25 × 25 pixel patches with their own noise.
+  - A frame takes about 1 ms instead of 26–48 ms. The background noise repeats every 48 frames (0.48 s); the spots' noise does not.
+  - Frames go to `aim_host` through a pipe, so no frame file is written.
+- **Interference set**, in image pixels:
+  - projector leak: a smooth scene with a target silhouette crossing it, ±10 % flicker;
+  - a sunlit window, saturating;
+  - three glints from a target frame;
+  - extra hot pixels (1e-4);
+  - a person crossing the lower part of the view in 2 s.
+- **Not done:** aim motion from S1's IMU recordings. The ITs use scripted aim paths (sway, flinch, sweeps).
 
 ---
 
@@ -330,22 +387,39 @@ Rendering cost is measured in week 1 (open point §11). If it is too slow for lo
 
 | Test | Result |
 |---|---|
-| IT01 | 54 of 54 dots found; fit 0.023 px RMS, held-out 0.023 px RMS (P06: 0.3 / 0.5 px); the calibrated mapping is within 0.041 mm of the true camera everywhere on the screen. A displaced grid and a partly hidden grid are both refused. |
-| IT02 | 500 of 500 shots found; 0.039 mm RMS, 0.082 mm at the 99th percentile, worst 0.093 mm (P01: 2 / 5 mm); no bias above 0.005 mm. |
-| IT08 | Emitter 2 mrad right and 1 mrad down from the bore: 11.5 mm RMS error before zeroing. Five zeroing shots at the centre, with 2 mm of aim scatter, measure the offset to 0.29 mm. After zeroing: 0.63 mm RMS and 1.2 mm worst over the screen. The rest is the zeroing shots' mean aim error, plus the offset growing towards the screen edges, because the misalignment is an angle. |
+| IT01 | 54 of 54 dots found; fit 0.023 px RMS, held-out 0.023 px RMS (P06: 0.3 / 0.5 px); the calibrated mapping is within 0.055 mm of the true camera everywhere on the screen (0.041 mm before the week 3 detection changes). A displaced grid and a partly hidden grid are both refused. |
+| IT02 | 500 of 500 shots found; 0.042 mm RMS, 0.082 mm at the 99th percentile, worst 0.099 mm (P01: 2 / 5 mm); bias 0.01 mm (week 3 re-run; 0.039 mm RMS in week 2). |
+| IT08 | Emitter 2 mrad right and 1 mrad down from the bore: 11.5 mm RMS error before zeroing. Five zeroing shots at the centre, with 2 mm of aim scatter, measure the offset to 0.30 mm. After zeroing: 0.64 mm RMS and 1.2 mm worst over the screen. The rest is the zeroing shots' mean aim error, plus the offset growing towards the screen edges, because the misalignment is an angle. |
 
-Plots: `results/plots/it01_calibration.png`, `results/plots/it02_accuracy.png`.
+**Week 3:** IT03–IT07 pass through `aim_host` itself:
+- `sim/scenario.py` streams each scenario into it through a pipe.
+- It runs on the file transport: its CAN input is a log, its CAN output is decoded with the DBC.
+- It writes the after-action records and a line per frame.
+IT01, IT02 and IT08 still use the ctypes path. All 13 integration tests run in about 65 s.
+
+| Test | Result |
+|---|---|
+| IT03 | 100 random breaks: 100 OK HITs, each from the right exposure.<br>• HIT latency 7.8–17.7 ms, mean 12.9 ms (P02: 25 ms), with the 2 ms margin. The HIT's own latency field agrees with true lane time to 0.1 ms.<br>• Positions within 0.2 mm.<br>• **P07:** every frame's exposure start, computed from SYNC and the camera timestamp, within 36 µs of the truth (limit ±100 µs); the tracker clock drifts 40 ppm. |
+| IT04 | 487 of 488 aim pulses gave an AIM, 0.11 mm RMS from the true aim point, about 49 Hz; no AIM without a pulse.<br>• 12 records, each with S1's SHOT_DETAIL merged by shot number and 73–74 trace points from −1.0 to +0.5 s (0.04 mm RMS from the truth).<br>• The 25 mm flinch shows in every trace as a 14 mm mean dip in the last 60 ms.<br>• TRK_STATUS at 1 Hz: 100 fps, worst frame 1.9 ms, no faults. |
+| IT05 | Two weapons:<br>• staggered shots: 60 of 60 attributed;<br>• both weapons in the same frame, 0.5 m apart: 100 of 100;<br>• both in the same frame, 8 mm apart: 60 of 60 AMBIGUOUS.<br>No wrong attribution anywhere. |
+| IT06 | Interference set, 60 shots, 800 frames per leak level:<br>• 4 DN and 12 DN projector leak: 57 of 57 visible shots OK, no false HIT; the 3 shots behind the person are NO_SPOT.<br>• 30 DN: 50 of 57 (88 %), still no false HIT. The moving silhouette swallows spots on its edges (§12). |
+| IT07 | Normal: OK. Beside the screen, inside the view: OFF_SCREEN with the position. Far off: NO_SPOT. Emitter covered: NO_SPOT. Frame dropped by the camera: DROPPED, and TRK_STATUS counts the 3 drops with its FRAMES_DROPPED bit. 400 times too bright: OK through the rim fit, within 0.14 mm. |
+
+Plots: `results/plots/it01_calibration.png`, `results/plots/it02_accuracy.png`, `results/plots/it03_latency.png`, `results/plots/it04_aim_trace.png`.
 
 ### 9.4 Honest limits
 - **The camera is simulated.** Accuracy is measured against the simulator's own truth. A real lens, sensor and screen bring effects the model leaves out or simplifies (screen texture, non-flat screens, lens flare, sensor non-linearity).
 - **Processing time is measured on an x86 CI runner**, not on a target board. P05 shows the algorithm's cost and its memory behaviour; a target board needs its own measurement.
 - **Renode time is virtual** (as in S1 and S2): the end-to-end test proves the timing logic and the matching, not silicon latency.
 - **One camera, one flat screen, up to four weapons.**
+- **Region renderer:** the background noise repeats every 48 frames (§8).
+- **The SocketCAN transport of `aim_host` is written and builds, but no test runs it yet.** It is first used in IT10 (week 4); every week 3 test uses the file transport.
+- **The projector-leak levels are not measured data** (§12).
 
 ---
 
 ## 10. Host tools and deliverables
-- `aim_host` with a CLI: `run`, `calibrate`, `zero`, `status`.
+- `aim_host` with a CLI: `run`, `calibrate`, `zero`, `status`. *As built (week 3):* one program with options rather than sub-commands. The run mode has a choice of transport (`--can-in/--can-out` log files, or `--can IFNAME`). Zeroing is `--zero NODE:X:Y:N --zero-out FILE`, and saved offsets are loaded with `--zero-in`. The status is the 1 Hz TRK_STATUS frame plus a JSON summary at exit. Calibration is the Python runner `tools/calib/calibrate.py`; `aim_host` reads its `calib.json` and checks `geometry_crc32`.
 - `tools/lane/lane_view.py`: the screen with targets, live aim traces per weapon, hits with shot numbers, and the after-action panel (aim trace before the break, hit, S1 trigger metrics).
 - `scripts/demo.sh`: S1 in Renode with two weapons, the camera simulator, `aim_host` and the lane view, recorded to a session log, plots, a GIF for the README and a video.
 - `docs/traceability.md`: every requirement to its tests.
@@ -359,7 +433,7 @@ Plots: `results/plots/it01_calibration.png`, `results/plots/it02_accuracy.png`.
 |---|---|---|
 | 1 ✓ | Repository from the S2 template; camera simulator (geometry, spots, sensor, ground truth); `detect` and `centroid` in C with the NumPy reference; centroid accuracy vs SNR | detect and centroid suites green; the centroid curve meets the P01 budget line. **Done 7 Nov:** 21 of 21 unit tests pass, 99.7 % line coverage; C matches NumPy on 40 frames; 0.018 px at the nominal spot |
 | 2 ✓ | `geom` and `calib`; OpenCV cross-check; accuracy over the screen; zeroing | IT01, IT02 and IT08 pass; P01 shown on plots. **Done 8 Nov:** 35 of 35 unit tests, 97.8 % line coverage; IT01, IT02 and IT08 pass; P01 0.039 mm RMS |
-| 3 | `timesync`, `track`, `match`; `aim_host` with the file transport and SocketCAN; DBC frames; S1 v0.6 emitter strobing with its own tests | IT03–IT07 pass; S1's tests still pass with v0.6 |
+| 3 ✓ | `timesync`, `track`, `match`; `aim_host` with the file transport and SocketCAN; DBC frames; S1 v0.6 emitter strobing with its own tests | IT03–IT07 pass; S1's tests still pass with v0.6. **Done 8 Nov:** 54 of 54 unit tests, 98.4 % line coverage; 13 of 13 integration tests; S1 v0.6: 81 of 81 unit tests, 32 of 32 Renode tests (3 new) |
 | 4 | IT09, IT10; lane view; demo, GIF and video; traceability; CI; README | Portfolio-ready repository with green CI |
 
 ---
@@ -376,7 +450,9 @@ Plots: `results/plots/it01_calibration.png`, `results/plots/it02_accuracy.png`.
   - In Renode the absolute accuracy cannot be measured, because frames arrive after a host-dependent delay (S1 README, "Honest limits").
   - P07 will be checked in virtual time in IT10 (week 4).
 - [x] **Frame transport:** a pipe carries 1270 MB/s (a Python writer sending 1 MB frames into `cat`), 12 times the 100 MB/s needed, so shared memory is not needed.
-- [ ] **Projector leak at 850 nm:** moved to week 3, with the interference set (IT06).
+- [x] **Projector leak at 850 nm:** I have not found public data for the 850 nm leak of a lane projector in a 1 ms exposure, so IT06 brackets it at 4, 12 and 30 DN, against an 8 DN detection floor and a 150 DN nominal spot.
+  - **The tracker meets P03 up to 12 DN.** At 30 DN a moving bright silhouette swallows 12 % of the spots, without any false HIT.
+  - **This becomes a requirement on the lane, to measure on site:** the 850 nm filter and the projector must keep the leak at or below about 12 DN, 8 % of the nominal spot. The calibration capture already shows it, as the ambient level in TRK_STATUS.
 
 ---
 

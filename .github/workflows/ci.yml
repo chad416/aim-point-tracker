@@ -33,7 +33,7 @@ jobs:
         run: |
           python3 -m venv "$AIMTRK_VENV"
           "$AIMTRK_VENV/bin/pip" install -q --upgrade pip
-          "$AIMTRK_VENV/bin/pip" install -q west numpy scipy matplotlib ruff pytest opencv-python-headless==5.0.0.93
+          "$AIMTRK_VENV/bin/pip" install -q west numpy scipy matplotlib ruff pytest cantools opencv-python-headless==5.0.0.93
 
       - name: Cache Zephyr and SDK
         uses: actions/cache@v4
@@ -60,6 +60,14 @@ jobs:
           cd aimtrk-fw
           ruff check sim tools tests --line-length 120
 
+      - name: "CAN protocol vectors current (protocol/tracker.dbc)"
+        run: |
+          source "$AIMTRK_VENV/bin/activate"
+          python3 aimtrk-fw/protocol/gen_vectors.py --check
+
+      - name: "Build aim_host (tracker service, -Werror)"
+        run: make -C aimtrk-fw/host
+
       - name: "Reference lane: screen inside the frame (SPEC 2a)"
         run: |
           source "$AIMTRK_VENV/bin/activate"
@@ -85,7 +93,7 @@ jobs:
           assert cov >= 0.90, "below the 90 % target"
           EOF
 
-      - name: "Integration tests IT01, IT02, IT08 on rendered sequences (SPEC 9.3)"
+      - name: "Integration tests IT01-IT08 on rendered sequences (SPEC 9.3)"
         run: bash aimtrk-fw/scripts/test-it.sh
 
       - name: Upload test reports and results
@@ -99,4 +107,5 @@ jobs:
             ${{ github.workspace }}/twister-out-aimtrk/twister.xml
             ${{ github.workspace }}/twister-out-aimtrk/twister.json
             aimtrk-fw/results/
+            aimtrk-fw/build/aim_host
           if-no-files-found: warn

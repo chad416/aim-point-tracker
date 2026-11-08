@@ -1,8 +1,10 @@
 #!/usr/bin/env python3
-"""Plots of the week 2 integration results (run after tests/integration).
+"""Plots of the integration results (run after tests/integration).
 
   results/plots/it01_calibration.png  reprojection residual of every grid dot
   results/plots/it02_accuracy.png     hit error over the screen and its distribution (P01)
+  results/plots/it03_latency.png      HIT latency after the trigger break (P02)
+  results/plots/it04_aim_trace.png    one after-action aim trace with the flinch (F12)
 """
 from __future__ import annotations
 
@@ -93,11 +95,52 @@ def plot_accuracy() -> None:
     plt.close(fig)
 
 
+def plot_latency() -> None:
+    d = json.loads((RES / "it03_latency.json").read_text())
+    lat = np.array(d["latencies_ms"])
+    fig, ax = plt.subplots(figsize=(7.2, 3.6), dpi=150)
+    ax.hist(lat, bins=np.arange(0, 26, 1.0), color=SERIES[0], edgecolor=SURFACE, linewidth=1)
+    ax.axvline(25.0, color=MUTED, lw=1, ls=(0, (4, 2)))
+    ax.text(24.8, ax.get_ylim()[1] * 0.95, "P02 limit 25 ms ", color=INK2, fontsize=8, ha="right", va="top")
+    ax.set_xlim(0, 26)
+    ax.set_xlabel("HIT on CAN after the trigger break, ms (true lane time)")
+    ax.set_ylabel("shots")
+    ax.set_title(f"IT03: HIT latency, {len(lat)} shots at random break times: "
+                 f"{lat.min():.1f}-{lat.max():.1f} ms", fontsize=10)
+    fig.tight_layout()
+    fig.savefig(RES / "plots" / "it03_latency.png")
+    plt.close(fig)
+
+
+def plot_trace() -> None:
+    d = json.loads((RES / "it04_aim_trace.json").read_text())
+    r = d["example_record"]
+    tr = np.array(r["trace"])
+    hx, hy = r["hit"]["x_mm"], r["hit"]["y_mm"]
+    fig, ax = plt.subplots(figsize=(7.2, 3.8), dpi=150)
+    ax.plot(tr[:, 0], tr[:, 1] - hx, color=SERIES[0], lw=2, marker="o", ms=3, label="horizontal")
+    ax.plot(tr[:, 0], tr[:, 2] - hy, color=SERIES[1], lw=2, marker="o", ms=3, label="vertical")
+    ax.axvline(0, color=MUTED, lw=1, ls=(0, (4, 2)))
+    ax.text(5, ax.get_ylim()[1] * 0.9, "trigger break", color=INK2, fontsize=8)
+    ax.set_xlabel("time from the trigger break, ms")
+    ax.set_ylabel("aim point relative to the hit, mm")
+    det = r["detail"]
+    ax.set_title(f"IT04: after-action record, shot {r['shot_no']}: aim trace (50 Hz), the flinch before the "
+                 f"break;\nS1 detail merged: take-up {det['takeup_ms']} ms, squeeze {det['squeeze_ms']} ms",
+                 fontsize=9.5)
+    ax.legend(loc="lower left")
+    fig.tight_layout()
+    fig.savefig(RES / "plots" / "it04_aim_trace.png")
+    plt.close(fig)
+
+
 def main() -> int:
     style()
     (RES / "plots").mkdir(parents=True, exist_ok=True)
     plot_calibration()
     plot_accuracy()
+    plot_latency()
+    plot_trace()
     print("->", RES / "plots")
     return 0
 

@@ -361,15 +361,47 @@ int at_detect_frame(at_detect *d, const uint8_t *img, size_t stride, at_spot *sp
 		return 0;
 	}
 
-	/* 2-3: noise, then the threshold per cell. */
+	/*
+	 * 2-3: noise, then the threshold per cell, over the highest background of
+	 * the cell and its 8 neighbours. A cell across a sharp edge (a window
+	 * frame, a person) averages its bright and dark parts; against its own
+	 * mean the bright part would sit near the threshold and its noise would
+	 * make spots (week 3, IT06). On a flat background this adds about 0.3 DN.
+	 */
 	float sigma = at_detect_noise(d, img, stride);
 	double delta = fmax((double)cfg->k_sigma * (double)sigma, (double)cfg->t_min);
 	int32_t delta256 = (int32_t)floor((delta * 256.0) + 0.5);
 
-	for (int i = 0; i < ncells; i++) {
-		int32_t t = ((int32_t)d->bg[i] + delta256) >> 8;
+	/* Separable 3 x 3 maximum: along rows into cellsum (free until the scan), then along columns. */
+	uint16_t *hmax = d->cellsum;
 
-		d->thr[i] = (t > 255) ? 255U : (uint8_t)t;
+	for (int cy = 0; cy < d->ch; cy++) {
+		const uint16_t *b = &d->bg[cy * d->cw];
+		uint16_t *o = &hmax[cy * d->cw];
+
+		for (int cx = 0; cx < d->cw; cx++) {
+			uint16_t v = b[cx];
+
+			if ((cx > 0) && (b[cx - 1] > v)) {
+				v = b[cx - 1];
+			}
+			if (((cx + 1) < d->cw) && (b[cx + 1] > v)) {
+				v = b[cx + 1];
+			}
+			o[cx] = v;
+		}
+	}
+	for (int cy = 0; cy < d->ch; cy++) {
+		const uint16_t *up = &hmax[((cy > 0) ? (cy - 1) : cy) * d->cw];
+		const uint16_t *mid = &hmax[cy * d->cw];
+		const uint16_t *dn = &hmax[(((cy + 1) < d->ch) ? (cy + 1) : cy) * d->cw];
+
+		for (int cx = 0; cx < d->cw; cx++) {
+			uint16_t v = (up[cx] > mid[cx]) ? up[cx] : mid[cx];
+			int32_t t = ((int32_t)((dn[cx] > v) ? dn[cx] : v) + delta256) >> 8;
+
+			d->thr[(cy * d->cw) + cx] = (t > 255) ? 255U : (uint8_t)t;
+		}
 	}
 
 	/* 4: runs, then blobs. */
@@ -449,17 +481,29 @@ int at_detect_frame(at_detect *d, const uint8_t *img, size_t stride, at_spot *sp
 		spots[nspots++] = s;
 	}
 
-	/* 1: background update, except under spots. */
+	/*
+	 * 1: background update, except under spots. A cell whose mean moved by more
+	 * than half the detection threshold is a change of the scene (a person
+	 * walking through, the projected image changing), not noise: it takes the
+	 * new value at once instead of trailing it for many frames (week 3, IT06).
+	 */
 	int64_t bg_sum = 0;
+	int32_t snap = delta256 / 2;
 
 	for (int i = 0; i < ncells; i++) {
 		if (d->freeze[i] != 0U) {
 			d->stats.frozen_cells++;
 		} else {
-			int32_t diff = SUM_TO_BG(d->cellsum[i]) - (int32_t)d->bg[i];
+			int32_t mean = SUM_TO_BG(d->cellsum[i]);
+			int32_t diff = mean - (int32_t)d->bg[i];
 
-			/* Truncates toward zero; moves toward a value in 0..65280, so it stays in range. */
-			d->bg[i] = (uint16_t)((int32_t)d->bg[i] + (diff / (1 << cfg->bg_shift)));
+			if ((diff > snap) || (diff < -snap)) {
+				d->bg[i] = (uint16_t)mean;
+				d->stats.snapped_cells++;
+			} else {
+				/* Truncates toward zero; moves toward a value in 0..65280, so it stays in range. */
+				d->bg[i] = (uint16_t)((int32_t)d->bg[i] + (diff / (1 << cfg->bg_shift)));
+			}
 		}
 		bg_sum += d->bg[i];
 	}

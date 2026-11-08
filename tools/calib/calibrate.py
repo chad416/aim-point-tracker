@@ -3,8 +3,11 @@
 
 Captures the projected 9 x 6 dot grid with the camera simulator, detects the
 dots with the C library, fits the geometry (at_calib_run) and stores it in
-calib.json with a version and a CRC-32. load() refuses a file whose CRC or
-version does not match.
+calib.json with a version and two CRC-32s:
+  crc32           the whole body (canonical JSON), checked by load() here;
+  geometry_crc32  the 18 numbers aim_host uses, as little-endian doubles, so
+                  the C reader (host/calibfile.c) can check them too.
+load() refuses a file whose CRCs or version do not match.
 
 Usage: calibrate.py [--out results/calib.json] [--seed 5]
 """
@@ -13,6 +16,7 @@ from __future__ import annotations
 import argparse
 import json
 import pathlib
+import struct
 import sys
 import time
 import zlib
@@ -26,7 +30,8 @@ sys.path.insert(0, str(ROOT / "tools" / "reference"))
 import aimtrk_c as AT  # noqa: E402
 import camsim  # noqa: E402
 
-VERSION = 1
+VERSION = 2
+LENS_KEYS = ("f", "cx", "cy", "k1", "k2", "p1", "p2")
 
 
 def nominal_lens() -> AT.Lens:
@@ -56,10 +61,17 @@ def crc(body: dict) -> int:
     return zlib.crc32(json.dumps(body, sort_keys=True, separators=(",", ":")).encode())
 
 
+def geometry_crc(g: dict) -> int:
+    """CRC-32 of lens (7), to_cam (9), screen_w, screen_h as little-endian doubles (host/calibfile.c)."""
+    vals = [g["lens"][k] for k in LENS_KEYS] + list(g["to_cam"]) + [g["screen_w"], g["screen_h"]]
+    return zlib.crc32(struct.pack("<18d", *vals))
+
+
 def save(path: pathlib.Path, geom, report: dict, grid_mm: np.ndarray) -> dict:
-    body = {"version": VERSION, "created_unix": int(time.time()), "geometry": AT.geom_dict(geom),
-            "report": report, "grid_mm": np.asarray(grid_mm).round(3).tolist(),
-            "nominal_lens": camsim.NOMINAL_LENS}
+    g = AT.geom_dict(geom)
+    body = {"version": VERSION, "created_unix": int(time.time()), "geometry": g,
+            "geometry_crc32": geometry_crc(g), "report": report,
+            "grid_mm": np.asarray(grid_mm).round(3).tolist(), "nominal_lens": camsim.NOMINAL_LENS}
     doc = {**body, "crc32": crc(body)}
     path.write_text(json.dumps(doc, indent=1) + "\n")
     return doc
@@ -71,7 +83,7 @@ def load(lib, path: pathlib.Path):
     body = {k: v for k, v in doc.items() if k != "crc32"}
     if doc.get("version") != VERSION:
         raise ValueError(f"calib.json version {doc.get('version')}, expected {VERSION}")
-    if crc(body) != doc.get("crc32"):
+    if crc(body) != doc.get("crc32") or geometry_crc(doc["geometry"]) != doc.get("geometry_crc32"):
         raise ValueError("calib.json CRC mismatch")
     return AT.geom_from_dict(lib, doc["geometry"]), doc
 

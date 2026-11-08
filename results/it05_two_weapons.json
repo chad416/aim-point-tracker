@@ -1,0 +1,48 @@
+{
+ "segments": {
+  "A": {
+   "shots": 60,
+   "correct": 60,
+   "wrong": 0,
+   "ambiguous": 0
+  },
+  "B": {
+   "shots": 100,
+   "correct": 100,
+   "wrong": 0,
+   "ambiguous": 0
+  },
+  "C": {
+   "shots": 60,
+   "correct": 0,
+   "wrong": 0,
+   "ambiguous": 60
+  }
+ },
+ "tracker_frames": {
+  "HIT": 220,
+  "AIM": 1519,
+  "TRK_STATUS": 17
+ },
+ "tracker_bus_load_pct": 2.5211666666666663,
+ "worst_case_frames_per_s": {
+  "SYNC": 100,
+  "SHOT_EVENT+DETAIL": 60.0,
+  "S1_STATUS": 20,
+  "HIT": 30.0,
+  "AIM": 100,
+  "TRK_STATUS": 1
+ },
+ "worst_case_frames_per_s_total": 311.0,
+ "worst_case_bus_load_pct": 7.5816,
+ "match": {
+  "frames": 1680,
+  "dropped": 0,
+  "stray_spots": 50,
+  "shots": 220,
+  "late_shots": 0,
+  "ambiguous": 60,
+  "unknown_node": 0
+ },
+ "failures": []
+}

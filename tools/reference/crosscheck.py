@@ -132,7 +132,7 @@ def main(argv=None) -> int:
         rs = ref.stats
         if st["overflow"]:
             errors.append(f"frame {k}: table overflow {st['overflow']}")
-        for f in ("sigma", "blobs", "frozen_cells"):
+        for f in ("sigma", "blobs", "frozen_cells", "snapped_cells"):
             if st[f] != rs[f]:
                 errors.append(f"frame {k}: stats {f} C {st[f]} ref {rs[f]}")
         if st["rejected"] != rs["rejected"]:

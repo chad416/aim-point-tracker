@@ -1,0 +1,22 @@
+{
+ "leak_dn": 30.0,
+ "frames": 800,
+ "shots_visible": 57,
+ "shots_ok": 50,
+ "detection_pct": 87.71929824561404,
+ "shots_hidden": 3,
+ "hidden_no_spot": 3,
+ "false_hits": 0,
+ "stray_spots": 1930,
+ "stray_spots_per_1000_frames": 2412.5,
+ "rejected": {
+  "small": 113981,
+  "large": 995,
+  "weak": 731,
+  "elongated": 2242
+ },
+ "proc_ms": {
+  "mean": 0.928,
+  "max": 1.869
+ }
+}

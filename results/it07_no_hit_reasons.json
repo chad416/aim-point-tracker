@@ -1,0 +1,84 @@
+{
+ "results": {
+  "normal": [
+   {
+    "result": "OK",
+    "error_mm": 0.108
+   },
+   {
+    "result": "OK",
+    "error_mm": 0.047
+   },
+   {
+    "result": "OK",
+    "error_mm": 0.055
+   }
+  ],
+  "beside": [
+   {
+    "result": "OFF_SCREEN",
+    "error_mm": 0.061
+   },
+   {
+    "result": "OFF_SCREEN",
+    "error_mm": 0.055
+   },
+   {
+    "result": "OFF_SCREEN",
+    "error_mm": 0.166
+   }
+  ],
+  "far_off": [
+   {
+    "result": "NO_SPOT"
+   },
+   {
+    "result": "NO_SPOT"
+   },
+   {
+    "result": "NO_SPOT"
+   }
+  ],
+  "covered": [
+   {
+    "result": "NO_SPOT"
+   },
+   {
+    "result": "NO_SPOT"
+   },
+   {
+    "result": "NO_SPOT"
+   }
+  ],
+  "dropped": [
+   {
+    "result": "DROPPED"
+   },
+   {
+    "result": "DROPPED"
+   },
+   {
+    "result": "DROPPED"
+   }
+  ],
+  "bright": [
+   {
+    "result": "OK",
+    "error_mm": 0.04
+   },
+   {
+    "result": "OK",
+    "error_mm": 0.137
+   },
+   {
+    "result": "OK",
+    "error_mm": 0.095
+   }
+  ]
+ },
+ "status_dropped_total": 3,
+ "status_faults_seen": [
+  0,
+  4
+ ]
+}

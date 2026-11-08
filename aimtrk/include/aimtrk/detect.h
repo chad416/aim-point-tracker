@@ -3,10 +3,12 @@
  *
  *  1. Background on a grid of AT_BG_CELL x AT_BG_CELL pixel cells: a running
  *     mean of each cell, in 16-bit fixed point (DN * 256, at most 65280), not
- *     updated under spots.
+ *     updated under spots. A cell whose mean moves by more than half the
+ *     detection threshold takes the new value at once (a scene change).
  *  2. Noise sigma from the median absolute deviation of (frame - background)
  *     on every 4th pixel of every 4th row.
- *  3. Threshold per cell: background + max(k_sigma * sigma, t_min).
+ *  3. Threshold per cell: the highest background of the cell and its 8
+ *     neighbours + max(k_sigma * sigma, t_min) (robust at sharp edges).
  *  4. Runs of pixels above the threshold per row, joined into blobs across
  *     rows with a union-find (8-connected).
  *  5. Blobs rejected by area, extent, peak SNR and elongation; the rest are
@@ -61,6 +63,7 @@ typedef struct {
 	uint32_t runs, blobs, spots;
 	uint32_t rejected[AT_REJ_COUNT];
 	uint32_t frozen_cells;           /* background cells not updated (under spots) */
+	uint32_t snapped_cells;          /* cells that changed by more than half the threshold: set at once */
 	uint8_t overflow;                /* AT_OVF_* */
 	bool learning;                   /* the frame seeded the background; nothing detected */
 } at_detect_stats;

@@ -1,0 +1,58 @@
+VERSION "tracker 0.1"
+
+NS_ :
+
+BS_:
+
+BU_: LANE WEAPON TRACKER
+
+BO_ 128 SYNC: 5 LANE
+ SG_ isotp_pci : 0|8@1+ (1,0) [4|4] "" WEAPON,TRACKER
+ SG_ lane_time_us : 8|32@1+ (1,0) [0|4294967295] "us" WEAPON,TRACKER
+
+BO_ 257 SHOT_EVENT_N1: 8 WEAPON
+ SG_ shot_no : 0|16@1+ (1,0) [0|65535] "" LANE,TRACKER
+ SG_ t_us : 16|32@1+ (1,0) [0|4294967295] "us" LANE,TRACKER
+ SG_ mode : 48|2@1+ (1,0) [0|3] "" LANE,TRACKER
+ SG_ chambered : 50|1@1+ (1,0) [0|1] "" LANE,TRACKER
+ SG_ rounds_left : 56|8@1+ (1,0) [0|255] "" LANE,TRACKER
+
+BO_ 385 SHOT_DETAIL_N1: 8 WEAPON
+ SG_ shot_no : 0|16@1+ (1,0) [0|65535] "" LANE,TRACKER
+ SG_ takeup_ms : 16|8@1+ (4,0) [0|1020] "ms" LANE,TRACKER
+ SG_ squeeze_ms : 24|8@1+ (4,0) [0|1020] "ms" LANE,TRACKER
+ SG_ jerk : 32|8@1+ (1,0) [0|255] "permille/ms" LANE,TRACKER
+ SG_ muzzle_rate : 40|8@1+ (1,0) [0|255] "deg/s" LANE,TRACKER
+ SG_ cant : 48|8@1- (1,0) [-128|127] "deg" LANE,TRACKER
+ SG_ flinch : 56|8@1- (0.1,0) [-12.8|12.7] "deg" LANE,TRACKER
+
+BO_ 1281 HIT_N1: 8 TRACKER
+ SG_ shot_no : 0|16@1+ (1,0) [0|65535] "" LANE
+ SG_ x_mm : 16|14@1- (0.25,0) [-2048|2047.75] "mm" LANE
+ SG_ y_mm : 30|14@1- (0.25,0) [-2048|2047.75] "mm" LANE
+ SG_ result : 44|4@1+ (1,0) [0|5] "" LANE
+ SG_ quality : 48|8@1+ (1,0) [0|255] "" LANE
+ SG_ latency : 56|8@1+ (0.1,0) [0|25.5] "ms" LANE
+
+BO_ 1409 AIM_N1: 6 TRACKER
+ SG_ frame_seq : 0|16@1+ (1,0) [0|65535] "" LANE
+ SG_ x_mm : 16|14@1- (0.25,0) [-2048|2047.75] "mm" LANE
+ SG_ y_mm : 30|14@1- (0.25,0) [-2048|2047.75] "mm" LANE
+
+BO_ 1662 TRK_STATUS: 7 TRACKER
+ SG_ fps_x10 : 0|16@1+ (0.1,0) [0|6553.5] "fps" LANE
+ SG_ dropped : 16|8@1+ (1,0) [0|255] "" LANE
+ SG_ worst_ms : 24|8@1+ (0.1,0) [0|25.5] "ms" LANE
+ SG_ ambient : 32|8@1+ (1,0) [0|255] "DN" LANE
+ SG_ cal_age_h : 40|8@1+ (1,0) [0|255] "h" LANE
+ SG_ faults : 48|8@1+ (1,0) [0|255] "" LANE
+
+CM_ "11-bit ID = (function << 7) | node_id, as trainer.dbc (S1). SYNC, SHOT_EVENT and SHOT_DETAIL are S1's frames (trainer.dbc 0.4), unchanged; the tracker reads them. HIT and AIM are defined for node 1 and use ID + (N - 1) for weapon N: the ID names the shooter, not the tracker. TRK_STATUS comes from the tracker, node 0x7E.";
+CM_ BO_ 1281 "One per SHOT_EVENT, sent when the shot frame is settled (SPEC 6.5). Positions in screen mm (x right, y up, origin at the screen centre) after zeroing, 0.25 mm steps, saturating at +-2048 mm. latency = HIT time - break time, lane time, saturating at 25.5 ms.";
+CM_ SG_ 1281 result "0 OK, 1 NO_SPOT, 2 OFF_SCREEN, 3 AMBIGUOUS, 4 SATURATED, 5 DROPPED. x_mm and y_mm are valid for OK, OFF_SCREEN and SATURATED.";
+CM_ SG_ 1281 quality "Peak SNR of the spot, saturating at 255; 0 when there is no position.";
+CM_ BO_ 1409 "One per weapon per aim slot frame with a spot (SPEC 6.5). frame_seq = exposure number k modulo 65536.";
+CM_ BO_ 1662 "1 Hz. Frame rate, frames dropped in the last second, worst processing time per frame, mean background (ambient IR), calibration age.";
+CM_ SG_ 1662 faults "bit0 NO_CALIBRATION, bit1 CALIBRATION_OLD (> 24 h), bit2 FRAMES_DROPPED, bit3 DETECT_OVERFLOW, bit4 SLOW (processing > 3 ms), bit5 NO_SYNC.";
+
+VAL_ 1281 result 0 "OK" 1 "NO_SPOT" 2 "OFF_SCREEN" 3 "AMBIGUOUS" 4 "SATURATED" 5 "DROPPED" ;
