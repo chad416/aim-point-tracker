@@ -19,7 +19,7 @@ Every requirement of [SPEC.md](../SPEC.md) §3, with the tests that check it and
 | F11 | AIM per slot frame; TRK_STATUS at 1 Hz | unit `proto`; IT04, IT07 | Met | TRK_STATUS at 1 Hz: 100 fps, worst frame, ambient, calibration age, FRAMES_DROPPED bit (IT07) |
 | F12 | After-action record: trace −1.0 to +0.5 s, hit, S1's SHOT_DETAIL merged | IT04 | Met | 12 of 12 records with SHOT_DETAIL merged, 73–74 trace points, the flinch visible |
 | F13 | Zeroing per weapon | unit `zero` (2); IT08; `aim_host --zero` (demo) | Met | 11.5 mm RMS before, 0.64 mm after five shots (IT08); the demo zeroes weapon 2 before its session |
-| F17 (S1) | S1's camera mode: pulses inside the exposures of its slot, shot pulse in the shot frame | IT10 (S1 v0.6.0 in Renode) | Met, with a finding | Pulse starts −30 to +236 µs from the plan, inside the ±250 µs margin. Pulses are 563–610 µs instead of 500 µs: 8 of 306 ended up to 80 µs after the exposure, with at least 86.5 % of each inside. A follow-up for S1 (SPEC §12). |
+| F17 (S1) | S1's camera mode: pulses inside the exposures of its slot, shot pulse in the shot frame | IT10 (S1 v0.6.1 in Renode) | Met | S1 v0.6.1: pulses 480–526 µs (500 µs ± the 10 µs quantum), starts −58 to +170 µs from the plan, inside the ±250 µs margin; every pulse fully inside its exposure. v0.6.0 had 563–610 µs pulses, 8 of 306 ending up to 80 µs after the exposure; fixed in S1 (SPEC §12). |
 
 ## Performance
 
@@ -38,4 +38,4 @@ Every requirement of [SPEC.md](../SPEC.md) §3, with the tests that check it and
 | Test | Covers | Status | Result |
 |---|---|---|---|
 | IT09 | P03, P05: 100 000 frames, two weapons, interference | Pass (`pytest -m long`, about 5 min; weekly in CI) | 1953 of 1954 visible shots, 0 false HITs, 40 of 40 hidden shots NO_SPOT, 0.16 mm RMS; 2.4 ms at the 99.9th percentile; no heap growth |
-| IT10 | F06, F08, F17 (S1), P02 with S1's firmware (v0.6.0) in Renode | Pass (replay in CI; `pytest -m cosim` re-records with Renode) | 8 of 8 S1 shots OK within 0.19 mm, 9.5–10.5 ms; 148 AIM frames per weapon; S1's pulse timing and length measured (F17 row) |
+| IT10 | F06, F08, F17 (S1), P02 with S1's firmware (v0.6.1) in Renode | Pass (replay in CI; `pytest -m cosim` re-records with Renode) | 8 of 8 S1 shots OK within 0.19 mm, 9.5–10.5 ms; 148 AIM frames per weapon; S1's pulse timing and length measured (F17 row) |

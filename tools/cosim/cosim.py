@@ -60,6 +60,7 @@ def aim(node: int, t_s: float) -> tuple[float, float]:
 def run_renode(out: pathlib.Path) -> None:
     """Run S1's lane in Renode with the driver. Paths (inside Linux/WSL, no spaces: Renode's
     monitor cannot take them): S1_ELF (zephyr.elf), S1_SIM (S1's sim/ directory), COSIM_DRIVER."""
+    out = out.resolve()  # the driver runs in Renode's own directory: a relative path would land there
     elf = os.environ.get("S1_ELF", "/root/trainer-ws/build/app/zephyr/zephyr.elf")
     sim = os.environ.get("S1_SIM", "/root/trainer-src/sim")
     drv = pathlib.Path(os.environ.get("COSIM_DRIVER", str(pathlib.Path(__file__).with_name("s1_lane_driver.py"))))
@@ -207,7 +208,7 @@ def build_and_run(rec: Recording, run_dir: pathlib.Path, calib: pathlib.Path, ca
 
 def main() -> None:
     ap = argparse.ArgumentParser(description=__doc__.split("\n")[0])
-    ap.add_argument("--events", type=pathlib.Path, default=ROOT / "tests" / "data" / "s1_v0.6.0_lane.txt")
+    ap.add_argument("--events", type=pathlib.Path, default=ROOT / "tests" / "data" / "s1_v0.6.1_lane.txt")
     ap.add_argument("--renode", action="store_true", help="run S1 in Renode first")
     ap.add_argument("--calib", type=pathlib.Path, default=ROOT / "results" / "calib.json")
     ap.add_argument("--out", type=pathlib.Path, default=ROOT / "results" / "cosim_run")

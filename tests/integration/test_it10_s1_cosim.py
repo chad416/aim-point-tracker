@@ -1,17 +1,18 @@
-"""IT10 end to end with S1 (SPEC Â§9.3): S1's real firmware (v0.6.0, two weapons
+"""IT10 end to end with S1 (SPEC §9.3): S1's real firmware (v0.6.1, two weapons
 in Renode) strobes its emitter on its own lane-time estimate and sends its own
 SHOT_EVENT frames; the camera frames are built from the emitter edges it gave,
 and aim_host runs on them with S1's CAN traffic.
 
-The Renode run is recorded in tests/data/s1_v0.6.0_lane.txt (made with
+The Renode run is recorded in tests/data/s1_v0.6.1_lane.txt (made with
 tools/cosim/cosim.py --renode), so this test replays it without Renode;
 test_rerecord (marker cosim) runs S1 again and checks the same.
 
   F17 / S1   every exposure of a weapon's slot has its pulse, none in the other
-             slot's; each pulse starts within 250 us of 4.75 ms into its frame
-             and at least 80 % of it falls inside the 1 ms exposure. (S1's
-             pulses are 0.57-0.61 ms, not 0.5 ms; with a late start the last
-             part can miss the exposure: reported, SPEC 12.)
+             slot's; each pulse starts within 250 us of 4.75 ms into its frame,
+             is 500 us +- 50 us long (the 10 us quantum coarsens interrupt
+             timing; S1's own test, IT17d, sees 500 us), and lies entirely
+             inside the 1 ms exposure. (v0.6.0 gave 0.56-0.61 ms pulses, some
+             ending past the exposure; S1 fixed that in v0.6.1, SPEC 12.)
   F10, P01   every SHOT_EVENT gives a HIT OK within 1 mm of the true spot
   P02        HIT latency (break -> HIT, lane time) <= 25 ms
   F09        AIM frames for both weapons; no stray spots
@@ -31,7 +32,7 @@ import lane as LN
 sys.path.insert(0, str(LN.ROOT / "tools" / "cosim"))
 import cosim  # noqa: E402
 
-RECORDING = LN.ROOT / "tests" / "data" / "s1_v0.6.0_lane.txt"
+RECORDING = LN.ROOT / "tests" / "data" / "s1_v0.6.1_lane.txt"
 
 
 def check(rec: cosim.Recording, run_dir: pathlib.Path, calib: pathlib.Path) -> dict:
@@ -65,6 +66,8 @@ def check(rec: cosim.Recording, run_dir: pathlib.Path, calib: pathlib.Path) -> d
     res["exposure_overrun_us_max"] = max(overrun)
     assert max(abs(e) for e in err) <= 250, res["pulse_start_error_us"]
     assert min(inside) >= 0.8, res
+    assert all(450 <= w <= 550 for w in width), res["pulse_width_us"]
+    assert res["exposure_overrun_us_max"] == 0, res
 
     # Shots: S1's SHOT_EVENTs, the tracker's HITs.
     hits = {(h["node"], h["shot_no"]): h for h in out["hits"]}

@@ -4,31 +4,31 @@
  "node1_pulses": 153,
  "node2_pulses": 153,
  "pulse_start_error_us": {
-  "min": -30,
-  "max": 236
+  "min": -58,
+  "max": 170
  },
  "pulse_width_us": {
-  "min": 563,
-  "max": 610
+  "min": 480,
+  "max": 526
  },
- "pulse_inside_exposure_min": 0.865,
- "pulses_past_exposure_end": 8,
- "exposure_overrun_us_max": 80,
+ "pulse_inside_exposure_min": 1.0,
+ "pulses_past_exposure_end": 0,
+ "exposure_overrun_us_max": 0,
  "hits": [
   {
    "node": 1,
    "shot_no": 1,
    "k": 600,
    "result": 0,
-   "error_mm": 0.165,
-   "latency_ms": 9.6
+   "error_mm": 0.192,
+   "latency_ms": 9.7
   },
   {
    "node": 2,
    "shot_no": 1,
    "k": 625,
    "result": 0,
-   "error_mm": 0.099,
+   "error_mm": 0.086,
    "latency_ms": 9.6
   },
   {
@@ -36,7 +36,7 @@
    "shot_no": 2,
    "k": 650,
    "result": 0,
-   "error_mm": 0.13,
+   "error_mm": 0.069,
    "latency_ms": 9.5
   },
   {
@@ -44,7 +44,7 @@
    "shot_no": 2,
    "k": 675,
    "result": 0,
-   "error_mm": 0.167,
+   "error_mm": 0.176,
    "latency_ms": 9.5
   },
   {
@@ -52,15 +52,15 @@
    "shot_no": 3,
    "k": 700,
    "result": 0,
-   "error_mm": 0.186,
-   "latency_ms": 10.4
+   "error_mm": 0.097,
+   "latency_ms": 10.1
   },
   {
    "node": 2,
    "shot_no": 3,
    "k": 725,
    "result": 0,
-   "error_mm": 0.121,
+   "error_mm": 0.137,
    "latency_ms": 10.5
   },
   {
@@ -68,16 +68,16 @@
    "shot_no": 4,
    "k": 750,
    "result": 0,
-   "error_mm": 0.026,
-   "latency_ms": 10.0
+   "error_mm": 0.102,
+   "latency_ms": 9.6
   },
   {
    "node": 2,
    "shot_no": 4,
    "k": 775,
    "result": 0,
-   "error_mm": 0.086,
-   "latency_ms": 10.3
+   "error_mm": 0.182,
+   "latency_ms": 10.4
   }
  ],
  "aims": {

@@ -1,6 +1,6 @@
 # S3 — Camera Aim-Point Tracker
 
-Specification, revision E (8 Nov 2026): week 4 done.
+Specification, revision F (8 Nov 2026): week 4 done; IT10 re-recorded with S1 v0.6.1.
 
 - **Revision B** (7 Nov) added the week 1 results (§2a, §3.3, §6.1, §6.2, §12) and the minimum of two time slots (§6.5).
 - **Revision C** (8 Nov) added the week 2 results (§3.3, §6.3, §6.4, §9.3) and a separate `zero` module (§5).
@@ -13,6 +13,7 @@ Specification, revision E (8 Nov 2026): week 4 done.
   - a spot must stand out from its own surroundings, and blobs too small to be a spot no longer take a place in the blob table (§6.1);
   - a new track starts only when its first spot is strong and is seen again in the next slot frame, and a track held by a wrong spot lets go after three slot frames (§6.6);
   - S1's pulses are 0.57–0.61 ms long, not 0.5 ms (§6.5, §12).
+- **Revision F** (8 Nov): S1 v0.6.1 fixes its pulse length; IT10 is re-recorded with it and now also checks the width (500 ± 50 µs) and that no pulse runs past its exposure (§6.5, §9.3, §12).
 
 Camera-based hit and aim tracking for a small-arms training lane. Each trainer weapon has an infrared emitter at the muzzle. An IR camera watches the projection screen, finds the emitter's spot in every frame and maps it to screen coordinates. It then tells the lane which weapon hit where:
 - a **hit** for every shot, matched to the weapon's SHOT_EVENT by lane time;
@@ -309,6 +310,7 @@ A 0.5 ms emitter pulse fired at a random moment overlaps a 1 ms exposure only 15
 - **Results:** every SHOT_EVENT gives a HIT, with a reason when there is no usable position. Every aim pulse with a spot gives an AIM. Positions are corrected by the weapon's zeroing; the tracks run on the raw positions.
 - Timing margin: the pulse sits in the middle of the exposure, so the weapon's lane-time estimate may be off by ±250 µs before the pulse leaves the exposure. S1's time sync must stay inside ±100 µs (P07, and a test on the S1 side).
   - **Measured with S1's firmware (IT10, week 4):** pulse starts −30 to +236 µs from the plan, and pulses 563–610 µs long instead of 500 µs. Together those put the end of 8 of 306 pulses up to 80 µs past the exposure (§12).
+  - **S1 v0.6.1 (revision F):** pulses 480–526 µs, starts −58 to +170 µs, every pulse fully inside its exposure.
 - **At least two slots** (week 1): the background is not updated under a spot (§6.1). If a weapon flashed in every frame, the background at a steady aim point would never be updated, and it would go wrong there when the projected scene changes. So N_slots ≥ 2 even with one weapon: a single weapon flashes in every other frame, and the frames in between update the background under its aim point (unit test `detect.test_background_tracks_and_freezes`).
 
 ### 6.6 Tracks
@@ -448,7 +450,7 @@ Plots: `results/plots/it01_calibration.png`, `results/plots/it02_accuracy.png`, 
 |---|---|
 | IT06 | 57 of 57 visible shots OK at 4, 8, 12 and 30 DN of projector leak, no false HIT; the 3 shots behind the person are NO_SPOT. Stray spots per 1000 frames: 1.2, 1.2, 3.8 and 24 (634 at 12 DN in week 3). |
 | IT09 | 100 000 frames (1000 s), two weapons sweeping the screen, 1994 shots, the interference set at 12 DN with the window, glints, hot pixels and a person:<br>• **P03:** 1953 of 1954 visible shots OK (99.95 %), 0.16 mm RMS, worst 2.8 mm; **0 false HITs**; the 40 hidden shots (behind the person, on or at the edge of the window) all NO_SPOT. The one miss is a spot 3–4 px below the saturated window's edge: NO_SPOT, not a wrong position.<br>• **P05:** thread CPU time per frame 1.0 ms median, 1.8 ms at the 99th, **2.4 ms at the 99.9th percentile**, 3.9 ms at the 99.99th, 13.4 ms worst. The slowest frames are ordinary ones (about 120 small blobs, as a typical frame), with the same wall time: the virtual machine took the CPU away (§9.4). Heap 10 800 bytes after the first frame and at the end.<br>• Frame times from SYNC within 44 µs; 96 798 AIM frames; 20.6 stray spots per 1000 frames; no track had to let go. |
-| IT10 | S1's firmware (v0.6.0) on two weapons in Renode, 3.4 s of virtual time; replayed from `tests/data/s1_v0.6.0_lane.txt`, and re-recorded with `pytest -m cosim` (about 30 s):<br>• S1 strobed in every slot frame of its weapon and none of the other: 153 pulses per weapon, starting −30 to +236 µs from the plan, 563–610 µs long; at least 86.5 % of every pulse inside its exposure (§12).<br>• Its 8 SHOT_EVENTs gave 8 OK HITs, 0.03–0.19 mm from the true spot, 9.5–10.5 ms after the break (P02: 25 ms).<br>• 148 AIM frames per weapon, no stray spot; the tracker clock's 40 ppm drift estimated from S1's lane SYNC. |
+| IT10 | S1's firmware (v0.6.1) on two weapons in Renode, 3.4 s of virtual time; replayed from `tests/data/s1_v0.6.1_lane.txt`, and re-recorded with `pytest -m cosim` (about 30 s):<br>• S1 strobed in every slot frame of its weapon and none of the other: 153 pulses per weapon, starting −58 to +170 µs from the plan, 480–526 µs long; every pulse fully inside its exposure (v0.6.0: 563–610 µs, 8 ending up to 80 µs past it; §12).<br>• Its 8 SHOT_EVENTs gave 8 OK HITs, 0.07–0.19 mm from the true spot, 9.5–10.5 ms after the break (P02: 25 ms).<br>• 148 AIM frames per weapon, no stray spot; the tracker clock's 40 ppm drift estimated from S1's lane SYNC. |
 
 ### 9.4 Honest limits
 - **The camera is simulated.** Accuracy is measured against the simulator's own truth. A real lens, sensor and screen bring effects the model leaves out or simplifies (screen texture, non-flat screens, lens flare, sensor non-linearity).
@@ -499,7 +501,8 @@ Plots: `results/plots/it01_calibration.png`, `results/plots/it02_accuracy.png`, 
 - [x] **S1 time sync and pulse timing** (IT10, virtual time, `results/it10_s1_cosim.json`):
   - S1's unit tests give ≤ 50 µs at ±200 ppm drift (S1 README, `timesync` row).
   - In IT10, 306 pulses of S1's firmware in Renode started −30 to +236 µs from the planned 4.75 ms into their frame: inside the ±250 µs that §6.5 allows, not inside ±100 µs. The figure includes the firmware's timer latency, not only its lane-time error.
-  - **The pulses are 563–610 µs long, not 500 µs.** With a late start the end of 8 of the 306 pulses ran up to 80 µs past the exposure, so up to 13.5 % of their light was lost. Every shot still gave an OK HIT. For S1: shorten the gate by the measured overrun, or start it earlier (a follow-up in S1, not done here).
+  - **The pulses are 563–610 µs long, not 500 µs.** With a late start the end of 8 of the 306 pulses ran up to 80 µs past the exposure, so up to 13.5 % of their light was lost. Every shot still gave an OK HIT.
+  - **Fixed in S1 v0.6.1:** the gate's off-timer was a relative kernel timeout, which Zephyr rounds up by one 100 µs tick; both edges now come from the timer interrupt on absolute tick edges, and SYNC is stamped with the cycle counter (S1 SPEC §13.6). Re-recorded, IT10 sees 480–526 µs pulses (the 10 µs co-simulation quantum coarsens the edges; S1's own test measures 500 µs) and none past its exposure. Starts are −58 to +170 µs: inside ±250 µs, not yet inside ±100 µs, because in some runs one weapon has a stretch of pulses 100–200 µs late (most likely SYNC delivery jitter between the two Renode machines; S1's single-machine test sees ≤ 29 µs).
 - [x] **Frame transport:** a pipe carries 1270 MB/s (a Python writer sending 1 MB frames into `cat`), 12 times the 100 MB/s needed, so shared memory is not needed.
 - [x] **Projector leak at 850 nm:** I have not found public data for the 850 nm leak of a lane projector in a 1 ms exposure, so IT06 brackets it at 4, 12 and 30 DN, against an 8 DN detection floor and a 150 DN nominal spot.
   - **Week 3:** P03 was met up to 12 DN; at 30 DN a moving bright silhouette swallowed 12 % of the spots, without any false HIT.
